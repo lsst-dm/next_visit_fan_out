@@ -1,0 +1,11 @@
+requests
+cloudevents
+asyncio
+aiohttp
+httpx
+aiokafka
+dataclasses-avroschema
+PyYAML==6.0
+kafkit[httpx]
+kafkit
+prometheus-client
