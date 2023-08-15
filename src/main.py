@@ -36,6 +36,7 @@ class NextVisitModel:
     nimages: int
     survey: str
     totalCheckpoints: int
+    private_sndStamp: float
 
     def add_detectors(
         self,
@@ -276,6 +277,9 @@ async def main() -> None:
                         survey=next_visit_message_initial["message"]["survey"],
                         totalCheckpoints=next_visit_message_initial["message"][
                             "totalCheckpoints"
+                        ],
+                        private_sndStamp=next_visit_message_initial["message"][
+                            "private_sndStamp"
                         ],
                     )
 
