@@ -132,6 +132,7 @@ async def knative_request(
         f"group id {next_visit_group_id} status code {result.status_code} for initial request {result.content}"
     )
 
+    '''
     if result.status_code == 502 or result.status_code == 503:
         logging.info(
             f"retry after status code {result.status_code} for group id {next_visit_group_id}"
@@ -145,6 +146,7 @@ async def knative_request(
         logging.info(
             f"group id {next_visit_group_id} retried request {retry_result.content}"
         )
+    '''
 
     in_process_requests_gauge.dec()
 
