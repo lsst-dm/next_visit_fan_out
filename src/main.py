@@ -67,7 +67,9 @@ class NextVisitModel:
             # temporary change to modify short filter names to format expected by butler
             # TODO: remove after CAP-967 fixed
             if temp_message["filters"] != "":
-                if len(temp_message["filters"]) == 1:
+                if temp_message["filters"] == "i":
+                    temp_message["filters"] = empty~SSDSi_65mm
+                elif len(temp_message["filters"]) == 1:
                     temp_message["filters"] = (
                         "SDSS" + temp_message["filters"] + "_65mm~empty"
                     )
