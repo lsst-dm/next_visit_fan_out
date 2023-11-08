@@ -66,10 +66,11 @@ class NextVisitModel:
             temp_message["detector"] = active_detector
             # temporary change to modify short filter names to format expected by butler
             # TODO: remove after CAP-967 fixed
-            if temp_message["filters"] != "" and len(temp_message["filters"]) == 1:
-                temp_message["filters"] = (
-                    "SDSS" + temp_message["filters"] + "_65mm~empty"
-                )
+            if temp_message["filters"] != "":
+                if len(temp_message["filters"]) == 1:
+                    temp_message["filters"] = (
+                        "SDSS" + temp_message["filters"] + "_65mm~empty"
+                    )
             message_list.append(temp_message)
         return message_list
 
