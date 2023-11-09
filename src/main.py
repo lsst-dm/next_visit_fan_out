@@ -69,6 +69,9 @@ class NextVisitModel:
                 temp_message["filters"] = (
                     "SDSS" + temp_message["filters"] + "_65mm~empty"
                 )
+            # provisional change to convert LATISS to Butler convention
+            if "empty_1" in temp_message["filters"]:
+                temp_message["filters"] = temp_message["filters"].replace("empty_1", "empty")
             message_list.append(temp_message)
         return message_list
 
