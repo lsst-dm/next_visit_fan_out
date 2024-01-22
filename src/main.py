@@ -25,6 +25,7 @@ class NextVisitModel:
     "Next Visit Message"
     salIndex: int
     scriptSalIndex: int
+    instrument: str
     groupId: str
     coordinateSystem: int
     position: typing.List[int]
@@ -40,7 +41,6 @@ class NextVisitModel:
 
     def add_detectors(
         self,
-        instrument: str,
         message: dict,
         active_detectors: list,
     ) -> list[dict[str, str]]:
@@ -48,8 +48,6 @@ class NextVisitModel:
 
         Parameters
         ----------
-        instrument: `str`
-            The instrument to load detectors for.
         message: `str`
             The next visit message.
         active_detectors: `list`
@@ -62,7 +60,6 @@ class NextVisitModel:
         message_list: list[dict[str, str]] = []
         for active_detector in active_detectors:
             temp_message = message.copy()
-            temp_message["instrument"] = instrument
             temp_message["detector"] = active_detector
             # temporary change to modify short filter names to format expected by butler
             if temp_message["filters"] != "" and len(temp_message["filters"]) == 1:
@@ -261,6 +258,7 @@ async def main() -> None:
                         scriptSalIndex=next_visit_message_initial["message"][
                             "scriptSalIndex"
                         ],
+                        instrument=next_visit_message_initial["message"]["instrument"],
                         groupId=next_visit_message_initial["message"]["groupId"],
                         coordinateSystem=next_visit_message_initial["message"][
                             "coordinateSystem"
@@ -285,12 +283,15 @@ async def main() -> None:
                         ],
                     )
 
+                    # Still use salIndex to know the instrument and its active
+                    # detectors, despite that instrument is also known from the
+                    # next_visit message. HSC has extra active detector
+                    # configurations just for the upload.py test.
                     match next_visit_message_updated.salIndex:
                         case 2:  # LATISS
                             latiss_gauge.inc()
                             fan_out_message_list = (
                                 next_visit_message_updated.add_detectors(
-                                    "LATISS",
                                     dataclasses.asdict(next_visit_message_updated),
                                     latiss_active_detectors,
                                 )
@@ -299,13 +300,12 @@ async def main() -> None:
                             in_process_requests_gauge = latiss_in_process_requests_gauge
                         # case "LSSTComCam":
                         #    fan_out_message_list = next_visit_message.add_detectors(
-                        #        "LSSTComCam", next_visit_message, lsst_com_cam_active_detectors
+                        #        next_visit_message, lsst_com_cam_active_detectors
                         #    )
                         case 1:  # LSSTCam
                             lsstcam_gauge.inc()
                             fan_out_message_list = (
                                 next_visit_message_updated.add_detectors(
-                                    "LSSTCam",
                                     dataclasses.asdict(next_visit_message_updated),
                                     lsst_cam_active_detectors,
                                 )
@@ -318,7 +318,6 @@ async def main() -> None:
                             hsc_gauge.inc()
                             fan_out_message_list = (
                                 next_visit_message_updated.add_detectors(
-                                    "HSC",
                                     dataclasses.asdict(next_visit_message_updated),
                                     hsc_active_detectors,
                                 )
@@ -329,7 +328,6 @@ async def main() -> None:
                             hsc_gauge.inc()
                             fan_out_message_list = (
                                 next_visit_message_updated.add_detectors(
-                                    "HSC",
                                     dataclasses.asdict(next_visit_message_updated),
                                     hsc_active_detectors_59134,
                                 )
@@ -340,7 +338,6 @@ async def main() -> None:
                             hsc_gauge.inc()
                             fan_out_message_list = (
                                 next_visit_message_updated.add_detectors(
-                                    "HSC",
                                     dataclasses.asdict(next_visit_message_updated),
                                     hsc_active_detectors_59142,
                                 )
@@ -351,7 +348,6 @@ async def main() -> None:
                             hsc_gauge.inc()
                             fan_out_message_list = (
                                 next_visit_message_updated.add_detectors(
-                                    "HSC",
                                     dataclasses.asdict(next_visit_message_updated),
                                     hsc_active_detectors_59150,
                                 )
@@ -362,7 +358,6 @@ async def main() -> None:
                             hsc_gauge.inc()
                             fan_out_message_list = (
                                 next_visit_message_updated.add_detectors(
-                                    "HSC",
                                     dataclasses.asdict(next_visit_message_updated),
                                     hsc_active_detectors_59160,
                                 )
@@ -371,7 +366,7 @@ async def main() -> None:
                             in_process_requests_gauge = hsc_in_process_requests_gauge
                         case _:
                             raise Exception(
-                                f"no matching case for salIndex {next_visit_message_updated.salIndex} to add instrument value"
+                                f"no matching case for salIndex {next_visit_message_updated.salIndex} to know the instrument"
                             )
 
                     try:
