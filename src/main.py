@@ -29,7 +29,6 @@ class NextVisitModel:
     groupId: str
     coordinateSystem: int
     position: typing.List[int]
-    startTime: float
     rotationSystem: int
     cameraAngle: float
     filters: str
@@ -254,6 +253,11 @@ async def main() -> None:
 
                     logging.info(f"message deserialized {next_visit_message_initial}")
 
+                    if not next_visit_message_initial["message"]["instrument"]:
+                        logging.info("Message does not have an instrument. Assuming "
+                                     "it's not an observation.")
+                        continue
+
                     next_visit_message_updated = NextVisitModel(
                         salIndex=next_visit_message_initial["message"]["salIndex"],
                         scriptSalIndex=next_visit_message_initial["message"][
@@ -265,7 +269,6 @@ async def main() -> None:
                             "coordinateSystem"
                         ],
                         position=next_visit_message_initial["message"]["position"],
-                        startTime=next_visit_message_initial["message"]["startTime"],
                         rotationSystem=next_visit_message_initial["message"][
                             "rotationSystem"
                         ],
