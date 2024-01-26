@@ -29,7 +29,6 @@ class NextVisitModel:
     groupId: str
     coordinateSystem: int
     position: typing.List[int]
-    startTime: float
     rotationSystem: int
     cameraAngle: float
     filters: str
@@ -265,7 +264,6 @@ async def main() -> None:
                             "coordinateSystem"
                         ],
                         position=next_visit_message_initial["message"]["position"],
-                        startTime=next_visit_message_initial["message"]["startTime"],
                         rotationSystem=next_visit_message_initial["message"][
                             "rotationSystem"
                         ],
