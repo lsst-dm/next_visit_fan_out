@@ -159,6 +159,7 @@ async def main() -> None:
     offset = os.environ["OFFSET"]
     kafka_schema_registry_url = os.environ["KAFKA_SCHEMA_REGISTRY_URL"]
     latiss_knative_serving_url = os.environ["LATISS_KNATIVE_SERVING_URL"]
+    lsstcomcamsim_knative_serving_url = os.environ["LSSTCOMCAMSIM_KNATIVE_SERVING_URL"]
     lsst_cam_knative_serving_url = os.environ["LSST_CAM_KNATIVE_SERVING_URL"]
     hsc_knative_serving_url = os.environ["HSC_KNATIVE_SERVING_URL"]
 
@@ -209,6 +210,10 @@ async def main() -> None:
         "lsstcomcam_next_visit_messages",
         "next visit nessages with lsstcomcam as instrument",
     )
+    lsstcomcamsim_gauge = Gauge(
+        "lsstcomcamsim_next_visit_messages",
+        "next visit nessages with lsstcomcamsim as instrument",
+    )
     hsc_gauge = Gauge(
         "hsc_next_visit_messages", "next visit nessages with hsc as instrument"
     )
@@ -230,6 +235,11 @@ async def main() -> None:
     lsstcomcam_in_process_requests_gauge = Gauge(
         "lsstcomcam_prompt_processing_in_process_requests",
         "lsstcomcam in process requests for next visit",
+    )
+
+    lsstcomcamsim_in_process_requests_gauge = Gauge(
+        "lsstcomcamsim_prompt_processing_in_process_requests",
+        "lsstcomcamsim in process requests for next visit",
     )
 
     await consumer.start()
@@ -305,10 +315,17 @@ async def main() -> None:
                             )
                             knative_serving_url = latiss_knative_serving_url
                             in_process_requests_gauge = latiss_in_process_requests_gauge
-                        # case "LSSTComCam":
-                        #    fan_out_message_list = next_visit_message.add_detectors(
-                        #        next_visit_message, lsst_com_cam_active_detectors
-                        #    )
+                        case 3:  # LSSTComCamSim
+                            lsstcomcamsim_gauge.inc()
+                            fan_out_message_list = (
+                                next_visit_message_updated.add_detectors(
+                                    dataclasses.asdict(next_visit_message_updated),
+                                    # Just use ComCam active detector config.
+                                    lsst_com_cam_active_detectors,
+                                )
+                            )
+                            knative_serving_url = lsstcomcamsim_knative_serving_url
+                            in_process_requests_gauge = lsstcomcamsim_in_process_requests_gauge
                         case 1:  # LSSTCam
                             lsstcam_gauge.inc()
                             fan_out_message_list = (
