@@ -159,6 +159,7 @@ async def main() -> None:
     offset = os.environ["OFFSET"]
     kafka_schema_registry_url = os.environ["KAFKA_SCHEMA_REGISTRY_URL"]
     latiss_knative_serving_url = os.environ["LATISS_KNATIVE_SERVING_URL"]
+    lsstcomcam_knative_serving_url = os.environ["LSSTCOMCAM_KNATIVE_SERVING_URL"]
     lsstcomcamsim_knative_serving_url = os.environ["LSSTCOMCAMSIM_KNATIVE_SERVING_URL"]
     lsstcam_knative_serving_url = os.environ["LSSTCAM_KNATIVE_SERVING_URL"]
     hsc_knative_serving_url = os.environ["HSC_KNATIVE_SERVING_URL"]
