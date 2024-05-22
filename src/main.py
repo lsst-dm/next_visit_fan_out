@@ -102,7 +102,7 @@ async def knative_request(
     knative_serving_url: str,
     headers: dict[str, str],
     body: bytes,
-    next_visit_group_id,
+    info: str,
 ) -> None:
     """Makes knative http request.
 
@@ -116,6 +116,9 @@ async def knative_request(
         The headers to pass to knative.
     body: `bytes`
         The next visit message body.
+    info: `str`
+        Information such as some fields of the next visit message to identify
+        this request and to log with.
     """
     in_process_requests_gauge.inc()
 
@@ -127,13 +130,13 @@ async def knative_request(
     )
 
     logging.info(
-        f"group id {next_visit_group_id} status code {result.status_code} for initial request {result.content}"
+        f"nextVisit {info} status code {result.status_code} for initial request {result.content}"
     )
 
     '''
     if result.status_code == 502 or result.status_code == 503:
         logging.info(
-            f"retry after status code {result.status_code} for group id {next_visit_group_id}"
+            f"retry after status code {result.status_code} for nextVisit {info}"
         )
         retry_result = await client.post(
             knative_serving_url,
@@ -142,7 +145,7 @@ async def knative_request(
             timeout=None,
         )
         logging.info(
-            f"group id {next_visit_group_id} retried request {retry_result.content}"
+            f"nextVisit {info} retried request {retry_result.content}"
         )
     '''
 
@@ -407,6 +410,9 @@ async def main() -> None:
                             logging.info(f"data after json dump {data_json}")
                             event = CloudEvent(attributes, data_json)
                             headers, body = to_structured(event)
+                            info = {
+                                key: data[key] for key in ["instrument", "groupId", "detector"]
+                            }
 
                             task = asyncio.create_task(
                                 knative_request(
@@ -415,7 +421,7 @@ async def main() -> None:
                                     knative_serving_url,
                                     headers,
                                     body,
-                                    next_visit_message_updated.groupId,
+                                    str(info),
                                 )
                             )
                             tasks.add(task)
