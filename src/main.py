@@ -1,26 +1,26 @@
+import asyncio
+import dataclasses
 import json
 import logging
 import os
+from pathlib import Path
 import sys
-import asyncio
-import httpx
-import yaml
 import typing
-import dataclasses
+
 from aiokafka import AIOKafkaConsumer  # type:ignore
 from cloudevents.conversion import to_structured
 from cloudevents.http import CloudEvent
-from dataclasses import dataclass
-from pathlib import Path
-from kafkit.registry.httpx import RegistryApi
+import httpx
 from kafkit.registry import Deserializer
+from kafkit.registry.httpx import RegistryApi
 from prometheus_client import start_http_server, Summary  # type:ignore
 from prometheus_client import Gauge
+import yaml
 
 REQUEST_TIME = Summary("request_processing_seconds", "Time spent processing request")
 
 
-@dataclass
+@dataclasses.dataclass
 class NextVisitModel:
     "Next Visit Message"
     salIndex: int
