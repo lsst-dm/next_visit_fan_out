@@ -336,6 +336,12 @@ async def main() -> None:
                             knative_serving_url = latiss_knative_serving_url
                             in_process_requests_gauge = latiss_in_process_requests_gauge
                         case 3:  # LSSTComCamSim
+                            if next_visit_message_updated.instrument != "LSSTComCamSim":
+                                logging.warning(
+                                    "Expect LSSTComCamSim for salIndex 3 but got %s. Ignore",
+                                    next_visit_message_updated.instrument,
+                                )
+                                continue
                             lsstcomcamsim_gauge.inc()
                             fan_out_message_list = (
                                 next_visit_message_updated.add_detectors(
