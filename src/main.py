@@ -342,18 +342,14 @@ async def main() -> None:
                             )
                             knative_serving_url = lsstcomcamsim_knative_serving_url
                             in_process_requests_gauge = lsstcomcamsim_in_process_requests_gauge
+                        case "LSSTComCam":
+                            logging.info(f"Ignore LSSTComCam message {next_visit_message_updated}"
+                                         " as the prompt service for this is not yet deployed.")
+                            continue
                         case "LSSTCam":
-                            lsstcam_gauge.inc()
-                            fan_out_message_list = (
-                                next_visit_message_updated.add_detectors(
-                                    dataclasses.asdict(next_visit_message_updated),
-                                    lsstcam_active_detectors,
-                                )
-                            )
-                            knative_serving_url = lsstcam_knative_serving_url
-                            in_process_requests_gauge = (
-                                lsstcam_in_process_requests_gauge
-                            )
+                            logging.info(f"Ignore LSSTCam message {next_visit_message_updated}"
+                                         " as the prompt service for this is not yet deployed.")
+                            continue
                         case "HSC":
                             # HSC has extra active detector configurations just for the
                             # upload.py test.
