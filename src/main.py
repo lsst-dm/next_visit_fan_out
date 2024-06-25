@@ -320,12 +320,8 @@ async def main() -> None:
                         ],
                     )
 
-                    # Still use salIndex to know the instrument and its active
-                    # detectors, despite that instrument is also known from the
-                    # next_visit message. HSC has extra active detector
-                    # configurations just for the upload.py test.
-                    match next_visit_message_updated.salIndex:
-                        case 2:  # LATISS
+                    match next_visit_message_updated.instrument:
+                        case "LATISS":
                             latiss_gauge.inc()
                             fan_out_message_list = (
                                 next_visit_message_updated.add_detectors(
@@ -335,7 +331,7 @@ async def main() -> None:
                             )
                             knative_serving_url = latiss_knative_serving_url
                             in_process_requests_gauge = latiss_in_process_requests_gauge
-                        case 3:  # LSSTComCamSim
+                        case "LSSTComCamSim":
                             lsstcomcamsim_gauge.inc()
                             fan_out_message_list = (
                                 next_visit_message_updated.add_detectors(
@@ -346,71 +342,71 @@ async def main() -> None:
                             )
                             knative_serving_url = lsstcomcamsim_knative_serving_url
                             in_process_requests_gauge = lsstcomcamsim_in_process_requests_gauge
-                        case 1:  # LSSTCam
-                            lsstcam_gauge.inc()
-                            fan_out_message_list = (
-                                next_visit_message_updated.add_detectors(
-                                    dataclasses.asdict(next_visit_message_updated),
-                                    lsstcam_active_detectors,
-                                )
-                            )
-                            knative_serving_url = lsstcam_knative_serving_url
-                            in_process_requests_gauge = (
-                                lsstcam_in_process_requests_gauge
-                            )
-                        case 999:  # HSC
-                            hsc_gauge.inc()
-                            fan_out_message_list = (
-                                next_visit_message_updated.add_detectors(
-                                    dataclasses.asdict(next_visit_message_updated),
-                                    hsc_active_detectors,
-                                )
-                            )
-                            knative_serving_url = hsc_knative_serving_url
-                            in_process_requests_gauge = hsc_in_process_requests_gauge
-                        case 59134:  # HSC upload.py test dataset
-                            hsc_gauge.inc()
-                            fan_out_message_list = (
-                                next_visit_message_updated.add_detectors(
-                                    dataclasses.asdict(next_visit_message_updated),
-                                    hsc_active_detectors_59134,
-                                )
-                            )
-                            knative_serving_url = hsc_knative_serving_url
-                            in_process_requests_gauge = hsc_in_process_requests_gauge
-                        case 59142:  # HSC upload.py test dataset
-                            hsc_gauge.inc()
-                            fan_out_message_list = (
-                                next_visit_message_updated.add_detectors(
-                                    dataclasses.asdict(next_visit_message_updated),
-                                    hsc_active_detectors_59142,
-                                )
-                            )
-                            knative_serving_url = hsc_knative_serving_url
-                            in_process_requests_gauge = hsc_in_process_requests_gauge
-                        case 59150:  # HSC upload.py test dataset
-                            hsc_gauge.inc()
-                            fan_out_message_list = (
-                                next_visit_message_updated.add_detectors(
-                                    dataclasses.asdict(next_visit_message_updated),
-                                    hsc_active_detectors_59150,
-                                )
-                            )
-                            knative_serving_url = hsc_knative_serving_url
-                            in_process_requests_gauge = hsc_in_process_requests_gauge
-                        case 59160:  # HSC upload.py test dataset
-                            hsc_gauge.inc()
-                            fan_out_message_list = (
-                                next_visit_message_updated.add_detectors(
-                                    dataclasses.asdict(next_visit_message_updated),
-                                    hsc_active_detectors_59160,
-                                )
-                            )
-                            knative_serving_url = hsc_knative_serving_url
-                            in_process_requests_gauge = hsc_in_process_requests_gauge
+                        case "LSSTComCam":
+                            logging.info(f"Ignore LSSTComCam message {next_visit_message_updated}"
+                                         " as the prompt service for this is not yet deployed.")
+                            continue
+                        case "LSSTCam":
+                            logging.info(f"Ignore LSSTCam message {next_visit_message_updated}"
+                                         " as the prompt service for this is not yet deployed.")
+                            continue
+                        case "HSC":
+                            # HSC has extra active detector configurations just for the
+                            # upload.py test.
+                            match next_visit_message_updated.salIndex:
+                                case 999:  # HSC datasets from using upload_from_repo.py
+                                    hsc_gauge.inc()
+                                    fan_out_message_list = (
+                                        next_visit_message_updated.add_detectors(
+                                            dataclasses.asdict(next_visit_message_updated),
+                                            hsc_active_detectors,
+                                        )
+                                    )
+                                    knative_serving_url = hsc_knative_serving_url
+                                    in_process_requests_gauge = hsc_in_process_requests_gauge
+                                case 59134:  # HSC upload.py test dataset
+                                    hsc_gauge.inc()
+                                    fan_out_message_list = (
+                                        next_visit_message_updated.add_detectors(
+                                            dataclasses.asdict(next_visit_message_updated),
+                                            hsc_active_detectors_59134,
+                                        )
+                                    )
+                                    knative_serving_url = hsc_knative_serving_url
+                                    in_process_requests_gauge = hsc_in_process_requests_gauge
+                                case 59142:  # HSC upload.py test dataset
+                                    hsc_gauge.inc()
+                                    fan_out_message_list = (
+                                        next_visit_message_updated.add_detectors(
+                                            dataclasses.asdict(next_visit_message_updated),
+                                            hsc_active_detectors_59142,
+                                        )
+                                    )
+                                    knative_serving_url = hsc_knative_serving_url
+                                    in_process_requests_gauge = hsc_in_process_requests_gauge
+                                case 59150:  # HSC upload.py test dataset
+                                    hsc_gauge.inc()
+                                    fan_out_message_list = (
+                                        next_visit_message_updated.add_detectors(
+                                            dataclasses.asdict(next_visit_message_updated),
+                                            hsc_active_detectors_59150,
+                                        )
+                                    )
+                                    knative_serving_url = hsc_knative_serving_url
+                                    in_process_requests_gauge = hsc_in_process_requests_gauge
+                                case 59160:  # HSC upload.py test dataset
+                                    hsc_gauge.inc()
+                                    fan_out_message_list = (
+                                        next_visit_message_updated.add_detectors(
+                                            dataclasses.asdict(next_visit_message_updated),
+                                            hsc_active_detectors_59160,
+                                        )
+                                    )
+                                    knative_serving_url = hsc_knative_serving_url
+                                    in_process_requests_gauge = hsc_in_process_requests_gauge
                         case _:
                             raise Exception(
-                                f"no matching case for salIndex {next_visit_message_updated.salIndex} to know the instrument"
+                                f"no matching case for instrument {next_visit_message_updated.instrument}."
                             )
 
                     try:
