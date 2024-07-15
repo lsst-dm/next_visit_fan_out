@@ -279,9 +279,9 @@ async def main() -> None:
                     # efdStamp is visit publication, in seconds since 1970-01-01 UTC
                     if next_visit_message_initial["message"]["private_efdStamp"]:
                         published = next_visit_message_initial["message"]["private_efdStamp"]
-                        age = time.time() - published
+                        age = round(time.time() - published)  # Microsecond precision is distracting
                         if age > expire:
-                            logging.warning("Message published at %s is %s old, ignoring.",
+                            logging.warning("Message published on %s UTC is %s old, ignoring.",
                                             time.ctime(published),
                                             datetime.timedelta(seconds=age)
                                             )
