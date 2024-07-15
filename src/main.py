@@ -281,7 +281,7 @@ async def main() -> None:
                         published = next_visit_message_initial["message"]["private_efdStamp"]
                         age = time.time() - published
                         if age > expire:
-                            logging.warning("Message published at %s is %s old, ignoring.",
+                            logging.warning("Message published on %s UTC is %s old, ignoring.",
                                             time.ctime(published),
                                             datetime.timedelta(seconds=age)
                                             )
