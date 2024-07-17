@@ -65,6 +65,11 @@ class NextVisitModel:
             temp_message = message.copy()
             temp_message["detector"] = active_detector
             message_list.append(temp_message)
+            # temporary workaround for empty filters, of which the names can be
+            # "empty", "empty_1", or "empty_2".
+            temp_message["filters"] = re.sub(
+                "empty_?\d", "empty", temp_message["filters"]
+            )
         return message_list
 
 
