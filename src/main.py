@@ -135,10 +135,9 @@ async def knative_request(
         f"nextVisit {info} status code {result.status_code} for initial request {result.content}"
     )
 
-    '''
-    if result.status_code == 502 or result.status_code == 503:
+    if result.status_code == 502 and "connection refused" in result.content:
         logging.info(
-            f"retry after status code {result.status_code} for nextVisit {info}"
+            f"retry after status code {result.status_code}: {result.content} for nextVisit {info}"
         )
         retry_result = await client.post(
             knative_serving_url,
@@ -149,7 +148,6 @@ async def knative_request(
         logging.info(
             f"nextVisit {info} retried request {retry_result.content}"
         )
-    '''
 
     in_process_requests_gauge.dec()
 
