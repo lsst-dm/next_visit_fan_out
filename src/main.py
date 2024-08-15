@@ -10,6 +10,7 @@ import time
 import typing
 
 from aiokafka import AIOKafkaConsumer  # type:ignore
+from aiokafka import AIOKafkaProducer  # type:ignore
 from cloudevents.conversion import to_structured
 from cloudevents.http import CloudEvent
 import httpx
@@ -20,7 +21,6 @@ from prometheus_client import Gauge
 import yaml
 
 REQUEST_TIME = Summary("request_processing_seconds", "Time spent processing request")
-
 
 @dataclasses.dataclass
 class NextVisitModel:
@@ -72,7 +72,6 @@ class NextVisitModel:
             message_list.append(temp_message)
         return message_list
 
-
 def detector_load(conf: dict, instrument: str) -> list[int]:
     """Load active instrument detectors from yaml configiration file of
     true false values for each detector.
@@ -96,6 +95,14 @@ def detector_load(conf: dict, instrument: str) -> list[int]:
             active_detectors.append(k)
     return active_detectors
 
+async def fan_out_msg(
+    fan_out_topic: fan_out_topic,
+    data: data
+):
+    try:
+        await producer.send_and_wait(fan_out_topic, b(data))
+    finally:
+        await producer.stop()
 
 @REQUEST_TIME.time()
 async def knative_request(
@@ -150,7 +157,6 @@ async def knative_request(
             f"nextVisit {info} retried request {retry_result.content}"
         )
     '''
-
     in_process_requests_gauge.dec()
 
 
@@ -169,6 +175,10 @@ async def main() -> None:
     lsstcomcamsim_knative_serving_url = os.environ["LSSTCOMCAMSIM_KNATIVE_SERVING_URL"]
     lsstcam_knative_serving_url = os.environ["LSSTCAM_KNATIVE_SERVING_URL"]
     hsc_knative_serving_url = os.environ["HSC_KNATIVE_SERVING_URL"]
+
+    # Keda environment variables
+    prompt_processing_kafka_cluster = os.environ["PROMPT_PROCESSING_KAFKA_CLUSTER"]
+    fan_out_topic = os.environ["FAN_OUT_TOPIC"]
 
     # kafka auth
     sasl_username = os.environ["SASL_USERNAME"]
@@ -206,6 +216,14 @@ async def main() -> None:
         sasl_plain_username=sasl_username,
         sasl_plain_password=sasl_password,
     )
+
+    # https://aiokafka.readthedocs.io/en/stable/producer.html
+    producer = AIOKafkaProducer(
+        fan_out_topic,
+        bootstrap_servers=prompt_processing_kafka_cluster,
+        enable_idempotence=True
+    )
+    await producer.start()
 
     latiss_gauge = Gauge(
         "latiss_next_visit_messages", "next visit nessages with latiss as instrument"
@@ -416,9 +434,17 @@ async def main() -> None:
                         }
 
                         for fan_out_message in fan_out_message_list:
+                            
+                            task = asyncio.create_task(
+                                fan_out_msg(
+                                    fan_out_topic,
+                                    fan_out_message
+                                )
+                            )
+
+                            '''
                             data = fan_out_message
                             data_json = json.dumps(data)
-
                             logging.info(f"data after json dump {data_json}")
                             event = CloudEvent(attributes, data_json)
                             headers, body = to_structured(event)
@@ -436,6 +462,7 @@ async def main() -> None:
                                     str(info),
                                 )
                             )
+                            '''
                             tasks.add(task)
                             task.add_done_callback(tasks.discard)
 
