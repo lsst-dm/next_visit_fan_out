@@ -122,36 +122,33 @@ async def knative_request(
         Information such as some fields of the next visit message to identify
         this request and to log with.
     """
-    in_process_requests_gauge.inc()
-
-    result = await client.post(
-        knative_serving_url,
-        headers=headers,
-        data=body,  # type:ignore
-        timeout=None,
-    )
-
-    logging.info(
-        f"nextVisit {info} status code {result.status_code} for initial request {result.content}"
-    )
-
-    '''
-    if result.status_code == 502 or result.status_code == 503:
-        logging.info(
-            f"retry after status code {result.status_code} for nextVisit {info}"
-        )
-        retry_result = await client.post(
+    with in_process_requests_gauge.track_inprogress():
+        result = await client.post(
             knative_serving_url,
             headers=headers,
             data=body,  # type:ignore
             timeout=None,
         )
-        logging.info(
-            f"nextVisit {info} retried request {retry_result.content}"
-        )
-    '''
 
-    in_process_requests_gauge.dec()
+        logging.info(
+            f"nextVisit {info} status code {result.status_code} for initial request {result.content}"
+        )
+
+        '''
+        if result.status_code == 502 or result.status_code == 503:
+            logging.info(
+                f"retry after status code {result.status_code} for nextVisit {info}"
+            )
+            retry_result = await client.post(
+                knative_serving_url,
+                headers=headers,
+                data=body,  # type:ignore
+                timeout=None,
+            )
+            logging.info(
+                f"nextVisit {info} retried request {retry_result.content}"
+            )
+        '''
 
 
 async def main() -> None:
