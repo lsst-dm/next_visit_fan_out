@@ -97,6 +97,34 @@ def detector_load(conf: dict, instrument: str) -> list[int]:
     return active_detectors
 
 
+@dataclasses.dataclass(frozen=True)
+class Metrics:
+    """A container for all metrics associated with a specific instrument.
+
+    Parameters
+    ----------
+    instrument : `str`
+        The instrument whose metrics are held by this object.
+    """
+
+    instrument: str
+    """The instrument whose metrics are held by this object (`str`)."""
+    total_received: Gauge
+    """The number of incoming messages processed by this instance (`prometheus_client.Gauge`)."""
+    in_process: Gauge
+    """The number of fanned-out messages currently being processed (`prometheus_client.Gauge`)."""
+
+    def __init__(self, instrument):
+        super().__setattr__("instrument", instrument)
+        word_instrument = instrument.lower().replace(" ", "_")
+        super().__setattr__("total_received",
+                            Gauge(word_instrument + "_next_visit_messages",
+                                  f"next visit messages with {instrument} as instrument"))
+        super().__setattr__("in_process",
+                            Gauge(word_instrument + "_prompt_processing_in_process_requests",
+                                  f"{instrument} in process requests for next visit"))
+
+
 @REQUEST_TIME.time()
 async def knative_request(
     in_process_requests_gauge,
@@ -152,6 +180,7 @@ async def knative_request(
 
 
 async def main() -> None:
+    supported_instruments = ["LATISS", "LSSTCam", "LSSTComCam", "LSSTComCamSim", "HSC", ]
 
     # Get environment variables
     detector_config_file = os.environ["DETECTOR_CONFIG_FILE"]
@@ -204,47 +233,7 @@ async def main() -> None:
         sasl_plain_password=sasl_password,
     )
 
-    latiss_gauge = Gauge(
-        "latiss_next_visit_messages", "next visit nessages with latiss as instrument"
-    )
-    lsstcam_gauge = Gauge(
-        "lsstcam_next_visit_messages", "next visit nessages with lsstcam as instrument"
-    )
-    lsstcomcam_gauge = Gauge(
-        "lsstcomcam_next_visit_messages",
-        "next visit nessages with lsstcomcam as instrument",
-    )
-    lsstcomcamsim_gauge = Gauge(
-        "lsstcomcamsim_next_visit_messages",
-        "next visit nessages with lsstcomcamsim as instrument",
-    )
-    hsc_gauge = Gauge(
-        "hsc_next_visit_messages", "next visit nessages with hsc as instrument"
-    )
-    hsc_in_process_requests_gauge = Gauge(
-        "hsc_prompt_processing_in_process_requests",
-        "hsc in process requests for next visit",
-    )
-
-    latiss_in_process_requests_gauge = Gauge(
-        "latiss_prompt_processing_in_process_requests",
-        "latiss in process requests for next visit",
-    )
-
-    lsstcam_in_process_requests_gauge = Gauge(
-        "lsstcam_prompt_processing_in_process_requests",
-        "lsstcam in process requests for next visit",
-    )
-
-    lsstcomcam_in_process_requests_gauge = Gauge(
-        "lsstcomcam_prompt_processing_in_process_requests",
-        "lsstcomcam in process requests for next visit",
-    )
-
-    lsstcomcamsim_in_process_requests_gauge = Gauge(
-        "lsstcomcamsim_prompt_processing_in_process_requests",
-        "lsstcomcamsim in process requests for next visit",
-    )
+    gauges = {inst: Metrics(inst) for inst in supported_instruments}
 
     await consumer.start()
 
@@ -319,7 +308,7 @@ async def main() -> None:
 
                     match next_visit_message_updated.instrument:
                         case "LATISS":
-                            latiss_gauge.inc()
+                            gauges["LATISS"].total_received.inc()
                             fan_out_message_list = (
                                 next_visit_message_updated.add_detectors(
                                     dataclasses.asdict(next_visit_message_updated),
@@ -327,9 +316,8 @@ async def main() -> None:
                                 )
                             )
                             knative_serving_url = latiss_knative_serving_url
-                            in_process_requests_gauge = latiss_in_process_requests_gauge
                         case "LSSTComCamSim":
-                            lsstcomcamsim_gauge.inc()
+                            gauges["LSSTComCamSim"].total_received.inc()
                             fan_out_message_list = (
                                 next_visit_message_updated.add_detectors(
                                     dataclasses.asdict(next_visit_message_updated),
@@ -338,7 +326,6 @@ async def main() -> None:
                                 )
                             )
                             knative_serving_url = lsstcomcamsim_knative_serving_url
-                            in_process_requests_gauge = lsstcomcamsim_in_process_requests_gauge
                         case "LSSTComCam":
                             logging.info(f"Ignore LSSTComCam message {next_visit_message_updated}"
                                          " as the prompt service for this is not yet deployed.")
@@ -352,7 +339,7 @@ async def main() -> None:
                             # upload.py test.
                             match next_visit_message_updated.salIndex:
                                 case 999:  # HSC datasets from using upload_from_repo.py
-                                    hsc_gauge.inc()
+                                    gauges["HSC"].total_received.inc()
                                     fan_out_message_list = (
                                         next_visit_message_updated.add_detectors(
                                             dataclasses.asdict(next_visit_message_updated),
@@ -360,9 +347,8 @@ async def main() -> None:
                                         )
                                     )
                                     knative_serving_url = hsc_knative_serving_url
-                                    in_process_requests_gauge = hsc_in_process_requests_gauge
                                 case 59134:  # HSC upload.py test dataset
-                                    hsc_gauge.inc()
+                                    gauges["HSC"].total_received.inc()
                                     fan_out_message_list = (
                                         next_visit_message_updated.add_detectors(
                                             dataclasses.asdict(next_visit_message_updated),
@@ -370,9 +356,8 @@ async def main() -> None:
                                         )
                                     )
                                     knative_serving_url = hsc_knative_serving_url
-                                    in_process_requests_gauge = hsc_in_process_requests_gauge
                                 case 59142:  # HSC upload.py test dataset
-                                    hsc_gauge.inc()
+                                    gauges["HSC"].total_received.inc()
                                     fan_out_message_list = (
                                         next_visit_message_updated.add_detectors(
                                             dataclasses.asdict(next_visit_message_updated),
@@ -380,9 +365,8 @@ async def main() -> None:
                                         )
                                     )
                                     knative_serving_url = hsc_knative_serving_url
-                                    in_process_requests_gauge = hsc_in_process_requests_gauge
                                 case 59150:  # HSC upload.py test dataset
-                                    hsc_gauge.inc()
+                                    gauges["HSC"].total_received.inc()
                                     fan_out_message_list = (
                                         next_visit_message_updated.add_detectors(
                                             dataclasses.asdict(next_visit_message_updated),
@@ -390,9 +374,8 @@ async def main() -> None:
                                         )
                                     )
                                     knative_serving_url = hsc_knative_serving_url
-                                    in_process_requests_gauge = hsc_in_process_requests_gauge
                                 case 59160:  # HSC upload.py test dataset
-                                    hsc_gauge.inc()
+                                    gauges["HSC"].total_received.inc()
                                     fan_out_message_list = (
                                         next_visit_message_updated.add_detectors(
                                             dataclasses.asdict(next_visit_message_updated),
@@ -400,7 +383,6 @@ async def main() -> None:
                                         )
                                     )
                                     knative_serving_url = hsc_knative_serving_url
-                                    in_process_requests_gauge = hsc_in_process_requests_gauge
                         case _:
                             raise Exception(
                                 f"no matching case for instrument {next_visit_message_updated.instrument}."
@@ -425,7 +407,7 @@ async def main() -> None:
 
                             task = asyncio.create_task(
                                 knative_request(
-                                    in_process_requests_gauge,
+                                    gauges[fan_out_message["instrument"]].in_process,
                                     client,
                                     knative_serving_url,
                                     headers,
