@@ -85,15 +85,15 @@ def detector_load(conf: dict, instrument: str) -> list[int]:
         The instrument to load detectors for.
     Yields
     ------
-    active_detectors : `list`
+    active_detectors : `list` [`int`]
         The active detectors for the instrument.
     """
 
     detectors = conf[instrument]["detectors"]
     active_detectors: list[int] = []
-    for k, v in detectors.items():
-        if v:
-            active_detectors.append(k)
+    for detector, active in detectors.items():
+        if active:
+            active_detectors.append(int(detector))
     return active_detectors
 
 
