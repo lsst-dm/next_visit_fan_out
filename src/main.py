@@ -45,15 +45,12 @@ class NextVisitModel:
 
     def add_detectors(
         self,
-        message: dict,
         active_detectors: list,
     ) -> list[dict[str, typing.Any]]:
-        """Adds and duplicates next visit messages for fanout.
+        """Adds and duplicates this message for fanout.
 
         Parameters
         ----------
-        message: `str`
-            The next visit message.
         active_detectors: `list`
             The active detectors for an instrument.
 
@@ -62,6 +59,7 @@ class NextVisitModel:
         message_list : `list` [`dict`]
             The message list for fan out.
         """
+        message = dataclasses.asdict(self)
         message_list: list[dict[str, typing.Any]] = []
         for active_detector in active_detectors:
             temp_message = message.copy()
@@ -178,9 +176,7 @@ def fan_out(next_visit, inst_config):
     fanned_out : `Submission`
         The submission information for the fanned-out messages.
     """
-    return Submission(inst_config.url,
-                      next_visit.add_detectors(dataclasses.asdict(next_visit), inst_config.detectors)
-                      )
+    return Submission(inst_config.url, next_visit.add_detectors(inst_config.detectors))
 
 
 def fan_out_hsc(next_visit, inst_config, detectors):
@@ -200,9 +196,7 @@ def fan_out_hsc(next_visit, inst_config, detectors):
     fanned_out : `Submission`
         The submission information for the fanned-out messages.
     """
-    return Submission(inst_config.url,
-                      next_visit.add_detectors(dataclasses.asdict(next_visit), detectors)
-                      )
+    return Submission(inst_config.url, next_visit.add_detectors(detectors))
 
 
 @REQUEST_TIME.time()
