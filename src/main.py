@@ -229,10 +229,8 @@ async def main() -> None:
     conf = yaml.safe_load(Path(instrument_config_file).read_text())
     instruments = {inst: InstrumentConfig(conf, inst) for inst in supported_instruments}
     # These four groups are for the small dataset used in the upload.py test
-    hsc_active_detectors_59134 = InstrumentConfig.detector_load(conf, "HSC-TEST-59134")
-    hsc_active_detectors_59142 = InstrumentConfig.detector_load(conf, "HSC-TEST-59142")
-    hsc_active_detectors_59150 = InstrumentConfig.detector_load(conf, "HSC-TEST-59150")
-    hsc_active_detectors_59160 = InstrumentConfig.detector_load(conf, "HSC-TEST-59160")
+    hsc_upload_detectors = {visit: InstrumentConfig.detector_load(conf, f"HSC-TEST-{visit}")
+                            for visit in {59134, 59142, 59150, 59160}}
 
     # Start Prometheus endpoint
     start_http_server(8000)
@@ -366,7 +364,7 @@ async def main() -> None:
                                     fan_out_message_list = (
                                         next_visit_message_updated.add_detectors(
                                             dataclasses.asdict(next_visit_message_updated),
-                                            hsc_active_detectors_59134,
+                                            hsc_upload_detectors[59134],
                                         )
                                     )
                                     knative_serving_url = instruments["HSC"].url
@@ -375,7 +373,7 @@ async def main() -> None:
                                     fan_out_message_list = (
                                         next_visit_message_updated.add_detectors(
                                             dataclasses.asdict(next_visit_message_updated),
-                                            hsc_active_detectors_59142,
+                                            hsc_upload_detectors[59142],
                                         )
                                     )
                                     knative_serving_url = instruments["HSC"].url
@@ -384,7 +382,7 @@ async def main() -> None:
                                     fan_out_message_list = (
                                         next_visit_message_updated.add_detectors(
                                             dataclasses.asdict(next_visit_message_updated),
-                                            hsc_active_detectors_59150,
+                                            hsc_upload_detectors[59150],
                                         )
                                     )
                                     knative_serving_url = instruments["HSC"].url
@@ -393,7 +391,7 @@ async def main() -> None:
                                     fan_out_message_list = (
                                         next_visit_message_updated.add_detectors(
                                             dataclasses.asdict(next_visit_message_updated),
-                                            hsc_active_detectors_59160,
+                                            hsc_upload_detectors[59160],
                                         )
                                     )
                                     knative_serving_url = instruments["HSC"].url
