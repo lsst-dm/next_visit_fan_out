@@ -1,4 +1,5 @@
 import asyncio
+import collections.abc
 import dataclasses
 import datetime
 import json
@@ -73,28 +74,53 @@ class NextVisitModel:
         return message_list
 
 
-def detector_load(conf: dict, instrument: str) -> list[int]:
-    """Load active instrument detectors from yaml configiration file of
-    true false values for each detector.
+@dataclasses.dataclass(frozen=True)
+class InstrumentConfig:
+    """The configuration used for sending messages to a specific instrument.
 
     Parameters
     ----------
     conf : `dict`
-        The instrument configuration from the yaml file.
-    instrument: `str`
-        The instrument to load detectors for.
-    Yields
-    ------
-    active_detectors : `list` [`int`]
-        The active detectors for the instrument.
+        A hierarchical instrument configuration, whose keys are instruments.
+    instrument : `str`
+        The instrument to configure.
     """
 
-    detectors = conf["detectors"][instrument]
-    active_detectors: list[int] = []
-    for detector, active in detectors.items():
-        if active:
-            active_detectors.append(int(detector))
-    return active_detectors
+    instrument: str
+    """The instrument whose metrics are held by this object (`str`)."""
+    url: str
+    """The address of the Knative Serving instance for this instrument (`str`)."""
+    detectors: collections.abc.Sequence[int]
+    """The active detectors for this instrument (sequence [`int`])."""
+
+    def __init__(self, conf, instrument):
+        super().__setattr__("instrument", instrument)
+        super().__setattr__("url", conf["knative-urls"][instrument])
+        super().__setattr__("detectors", self.detector_load(conf, instrument))
+
+    @staticmethod
+    def detector_load(conf: dict, instrument: str) -> list[int]:
+        """Load active instrument detectors from yaml configiration file of
+        true false values for each detector.
+
+        Parameters
+        ----------
+        conf : `dict`
+            The instrument configuration from the yaml file.
+        instrument : `str`
+            The instrument to load detectors for.
+
+        Returns
+        -------
+        active_detectors : `list` [`int`]
+            The active detectors for the instrument.
+        """
+        detectors = conf["detectors"][instrument]
+        active_detectors: list[int] = []
+        for detector, active in detectors.items():
+            if active:
+                active_detectors.append(int(detector))
+        return active_detectors
 
 
 @dataclasses.dataclass(frozen=True)
@@ -201,23 +227,12 @@ async def main() -> None:
     logging.basicConfig(stream=sys.stderr, level=logging.WARNING)
 
     conf = yaml.safe_load(Path(instrument_config_file).read_text())
-
-    latiss_knative_serving_url = conf["knative-urls"]["LATISS"]
-    lsstcomcam_knative_serving_url = conf["knative-urls"]["LSSTComCam"]
-    lsstcomcamsim_knative_serving_url = conf["knative-urls"]["LSSTComCamSim"]
-    lsstcam_knative_serving_url = conf["knative-urls"]["LSSTCam"]
-    hsc_knative_serving_url = conf["knative-urls"]["HSC"]
-
-    # list based on keys in config.  Data class
-    latiss_active_detectors = detector_load(conf, "LATISS")
-    lsstcomcam_active_detectors = detector_load(conf, "LSSTComCam")
-    lsstcam_active_detectors = detector_load(conf, "LSSTCam")
-    hsc_active_detectors = detector_load(conf, "HSC")
+    instruments = {inst: InstrumentConfig(conf, inst) for inst in supported_instruments}
     # These four groups are for the small dataset used in the upload.py test
-    hsc_active_detectors_59134 = detector_load(conf, "HSC-TEST-59134")
-    hsc_active_detectors_59142 = detector_load(conf, "HSC-TEST-59142")
-    hsc_active_detectors_59150 = detector_load(conf, "HSC-TEST-59150")
-    hsc_active_detectors_59160 = detector_load(conf, "HSC-TEST-59160")
+    hsc_active_detectors_59134 = InstrumentConfig.detector_load(conf, "HSC-TEST-59134")
+    hsc_active_detectors_59142 = InstrumentConfig.detector_load(conf, "HSC-TEST-59142")
+    hsc_active_detectors_59150 = InstrumentConfig.detector_load(conf, "HSC-TEST-59150")
+    hsc_active_detectors_59160 = InstrumentConfig.detector_load(conf, "HSC-TEST-59160")
 
     # Start Prometheus endpoint
     start_http_server(8000)
@@ -312,20 +327,19 @@ async def main() -> None:
                             fan_out_message_list = (
                                 next_visit_message_updated.add_detectors(
                                     dataclasses.asdict(next_visit_message_updated),
-                                    latiss_active_detectors,
+                                    instruments["LATISS"].detectors,
                                 )
                             )
-                            knative_serving_url = latiss_knative_serving_url
+                            knative_serving_url = instruments["LATISS"].url
                         case "LSSTComCamSim":
                             gauges["LSSTComCamSim"].total_received.inc()
                             fan_out_message_list = (
                                 next_visit_message_updated.add_detectors(
                                     dataclasses.asdict(next_visit_message_updated),
-                                    # Just use ComCam active detector config.
-                                    lsstcomcam_active_detectors,
+                                    instruments["LSSTComCamSim"].detectors,
                                 )
                             )
-                            knative_serving_url = lsstcomcamsim_knative_serving_url
+                            knative_serving_url = instruments["LSSTComCamSim"].url
                         case "LSSTComCam":
                             logging.info(f"Ignore LSSTComCam message {next_visit_message_updated}"
                                          " as the prompt service for this is not yet deployed.")
@@ -343,10 +357,10 @@ async def main() -> None:
                                     fan_out_message_list = (
                                         next_visit_message_updated.add_detectors(
                                             dataclasses.asdict(next_visit_message_updated),
-                                            hsc_active_detectors,
+                                            instruments["HSC"].detectors,
                                         )
                                     )
-                                    knative_serving_url = hsc_knative_serving_url
+                                    knative_serving_url = instruments["HSC"].url
                                 case 59134:  # HSC upload.py test dataset
                                     gauges["HSC"].total_received.inc()
                                     fan_out_message_list = (
@@ -355,7 +369,7 @@ async def main() -> None:
                                             hsc_active_detectors_59134,
                                         )
                                     )
-                                    knative_serving_url = hsc_knative_serving_url
+                                    knative_serving_url = instruments["HSC"].url
                                 case 59142:  # HSC upload.py test dataset
                                     gauges["HSC"].total_received.inc()
                                     fan_out_message_list = (
@@ -364,7 +378,7 @@ async def main() -> None:
                                             hsc_active_detectors_59142,
                                         )
                                     )
-                                    knative_serving_url = hsc_knative_serving_url
+                                    knative_serving_url = instruments["HSC"].url
                                 case 59150:  # HSC upload.py test dataset
                                     gauges["HSC"].total_received.inc()
                                     fan_out_message_list = (
@@ -373,7 +387,7 @@ async def main() -> None:
                                             hsc_active_detectors_59150,
                                         )
                                     )
-                                    knative_serving_url = hsc_knative_serving_url
+                                    knative_serving_url = instruments["HSC"].url
                                 case 59160:  # HSC upload.py test dataset
                                     gauges["HSC"].total_received.inc()
                                     fan_out_message_list = (
@@ -382,7 +396,7 @@ async def main() -> None:
                                             hsc_active_detectors_59160,
                                         )
                                     )
-                                    knative_serving_url = hsc_knative_serving_url
+                                    knative_serving_url = instruments["HSC"].url
                         case _:
                             raise Exception(
                                 f"no matching case for instrument {next_visit_message_updated.instrument}."
