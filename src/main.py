@@ -31,7 +31,7 @@ class NextVisitModel:
     instrument: str
     groupId: str
     coordinateSystem: int
-    position: typing.List[int]
+    position: list[float]
     startTime: float
     rotationSystem: int
     cameraAngle: float
@@ -47,7 +47,7 @@ class NextVisitModel:
         self,
         message: dict,
         active_detectors: list,
-    ) -> list[dict[str, str]]:
+    ) -> list[dict[str, typing.Any]]:
         """Adds and duplicates next visit messages for fanout.
 
         Parameters
@@ -56,12 +56,13 @@ class NextVisitModel:
             The next visit message.
         active_detectors: `list`
             The active detectors for an instrument.
-        Yields
-        ------
-        message_list : `list`
+
+        Returns
+        -------
+        message_list : `list` [`dict`]
             The message list for fan out.
         """
-        message_list: list[dict[str, str]] = []
+        message_list: list[dict[str, typing.Any]] = []
         for active_detector in active_detectors:
             temp_message = message.copy()
             temp_message["detector"] = active_detector
