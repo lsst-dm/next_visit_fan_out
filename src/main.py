@@ -152,6 +152,17 @@ class Metrics:
                                   f"{instrument} in process requests for next visit"))
 
 
+@dataclasses.dataclass(frozen=True)
+class Submission:
+    """The batched requests to be submitted to a Knative instance.
+    """
+
+    url: str
+    """The address of the Knative Serving instance to send requests to (`str`)."""
+    fan_out_messages: collections.abc.Collection[dict[str, typing.Any]]
+    """The messages to send to ``url`` (collection [`dict`])."""
+
+
 @REQUEST_TIME.time()
 async def knative_request(
     in_process_requests_gauge,
@@ -323,22 +334,22 @@ async def main() -> None:
                     match next_visit_message_updated.instrument:
                         case "LATISS":
                             gauges["LATISS"].total_received.inc()
-                            fan_out_message_list = (
+                            send_info = Submission(
+                                instruments["LATISS"].url,
                                 next_visit_message_updated.add_detectors(
                                     dataclasses.asdict(next_visit_message_updated),
                                     instruments["LATISS"].detectors,
                                 )
                             )
-                            knative_serving_url = instruments["LATISS"].url
                         case "LSSTComCamSim":
                             gauges["LSSTComCamSim"].total_received.inc()
-                            fan_out_message_list = (
+                            send_info = Submission(
+                                instruments["LSSTComCamSim"].url,
                                 next_visit_message_updated.add_detectors(
                                     dataclasses.asdict(next_visit_message_updated),
                                     instruments["LSSTComCamSim"].detectors,
                                 )
                             )
-                            knative_serving_url = instruments["LSSTComCamSim"].url
                         case "LSSTComCam":
                             logging.info(f"Ignore LSSTComCam message {next_visit_message_updated}"
                                          " as the prompt service for this is not yet deployed.")
@@ -353,49 +364,49 @@ async def main() -> None:
                             match next_visit_message_updated.salIndex:
                                 case 999:  # HSC datasets from using upload_from_repo.py
                                     gauges["HSC"].total_received.inc()
-                                    fan_out_message_list = (
+                                    send_info = Submission(
+                                        instruments["HSC"].url,
                                         next_visit_message_updated.add_detectors(
                                             dataclasses.asdict(next_visit_message_updated),
                                             instruments["HSC"].detectors,
                                         )
                                     )
-                                    knative_serving_url = instruments["HSC"].url
                                 case 59134:  # HSC upload.py test dataset
                                     gauges["HSC"].total_received.inc()
-                                    fan_out_message_list = (
+                                    send_info = Submission(
+                                        instruments["HSC"].url,
                                         next_visit_message_updated.add_detectors(
                                             dataclasses.asdict(next_visit_message_updated),
                                             hsc_upload_detectors[59134],
                                         )
                                     )
-                                    knative_serving_url = instruments["HSC"].url
                                 case 59142:  # HSC upload.py test dataset
                                     gauges["HSC"].total_received.inc()
-                                    fan_out_message_list = (
+                                    send_info = Submission(
+                                        instruments["HSC"].url,
                                         next_visit_message_updated.add_detectors(
                                             dataclasses.asdict(next_visit_message_updated),
                                             hsc_upload_detectors[59142],
                                         )
                                     )
-                                    knative_serving_url = instruments["HSC"].url
                                 case 59150:  # HSC upload.py test dataset
                                     gauges["HSC"].total_received.inc()
-                                    fan_out_message_list = (
+                                    send_info = Submission(
+                                        instruments["HSC"].url,
                                         next_visit_message_updated.add_detectors(
                                             dataclasses.asdict(next_visit_message_updated),
                                             hsc_upload_detectors[59150],
                                         )
                                     )
-                                    knative_serving_url = instruments["HSC"].url
                                 case 59160:  # HSC upload.py test dataset
                                     gauges["HSC"].total_received.inc()
-                                    fan_out_message_list = (
+                                    send_info = Submission(
+                                        instruments["HSC"].url,
                                         next_visit_message_updated.add_detectors(
                                             dataclasses.asdict(next_visit_message_updated),
                                             hsc_upload_detectors[59160],
                                         )
                                     )
-                                    knative_serving_url = instruments["HSC"].url
                         case _:
                             raise Exception(
                                 f"no matching case for instrument {next_visit_message_updated.instrument}."
@@ -407,7 +418,7 @@ async def main() -> None:
                             "source": topic,
                         }
 
-                        for fan_out_message in fan_out_message_list:
+                        for fan_out_message in send_info.fan_out_messages:
                             data = fan_out_message
                             data_json = json.dumps(data)
 
@@ -422,7 +433,7 @@ async def main() -> None:
                                 knative_request(
                                     gauges[fan_out_message["instrument"]].in_process,
                                     client,
-                                    knative_serving_url,
+                                    send_info.url,
                                     headers,
                                     body,
                                     str(info),
