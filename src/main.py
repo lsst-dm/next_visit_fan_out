@@ -189,11 +189,6 @@ async def main() -> None:
     offset = os.environ["OFFSET"]
     expire = float(os.environ["MESSAGE_EXPIRATION"])
     kafka_schema_registry_url = os.environ["KAFKA_SCHEMA_REGISTRY_URL"]
-    latiss_knative_serving_url = os.environ["LATISS_KNATIVE_SERVING_URL"]
-    lsstcomcam_knative_serving_url = os.environ["LSSTCOMCAM_KNATIVE_SERVING_URL"]
-    lsstcomcamsim_knative_serving_url = os.environ["LSSTCOMCAMSIM_KNATIVE_SERVING_URL"]
-    lsstcam_knative_serving_url = os.environ["LSSTCAM_KNATIVE_SERVING_URL"]
-    hsc_knative_serving_url = os.environ["HSC_KNATIVE_SERVING_URL"]
 
     # kafka auth
     sasl_username = os.environ["SASL_USERNAME"]
@@ -206,6 +201,12 @@ async def main() -> None:
     logging.basicConfig(stream=sys.stderr, level=logging.WARNING)
 
     conf = yaml.safe_load(Path(instrument_config_file).read_text())
+
+    latiss_knative_serving_url = conf["knative-urls"]["LATISS"]
+    lsstcomcam_knative_serving_url = conf["knative-urls"]["LSSTComCam"]
+    lsstcomcamsim_knative_serving_url = conf["knative-urls"]["LSSTComCamSim"]
+    lsstcam_knative_serving_url = conf["knative-urls"]["LSSTCam"]
+    hsc_knative_serving_url = conf["knative-urls"]["HSC"]
 
     # list based on keys in config.  Data class
     latiss_active_detectors = detector_load(conf, "LATISS")
