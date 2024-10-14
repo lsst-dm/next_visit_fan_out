@@ -180,9 +180,8 @@ async def knative_request(
 
 
 async def main() -> None:
-    supported_instruments = ["LATISS", "LSSTCam", "LSSTComCam", "LSSTComCamSim", "HSC", ]
-
     # Get environment variables
+    supported_instruments = os.environ["SUPPORTED_INSTRUMENTS"].split()
     detector_config_file = os.environ["DETECTOR_CONFIG_FILE"]
     kafka_cluster = os.environ["KAFKA_CLUSTER"]
     group_id = os.environ["CONSUMER_GROUP"]
