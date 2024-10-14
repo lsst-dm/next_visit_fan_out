@@ -182,7 +182,7 @@ async def knative_request(
 async def main() -> None:
     # Get environment variables
     supported_instruments = os.environ["SUPPORTED_INSTRUMENTS"].split()
-    detector_config_file = os.environ["DETECTOR_CONFIG_FILE"]
+    instrument_config_file = os.environ["INSTRUMENT_CONFIG_FILE"]
     kafka_cluster = os.environ["KAFKA_CLUSTER"]
     group_id = os.environ["CONSUMER_GROUP"]
     topic = os.environ["NEXT_VISIT_TOPIC"]
@@ -205,7 +205,7 @@ async def main() -> None:
     logging.basicConfig(stream=sys.stdout, level=logging.INFO)
     logging.basicConfig(stream=sys.stderr, level=logging.WARNING)
 
-    conf = yaml.safe_load(Path(detector_config_file).read_text())
+    conf = yaml.safe_load(Path(instrument_config_file).read_text())
 
     # list based on keys in config.  Data class
     latiss_active_detectors = detector_load(conf, "LATISS")
