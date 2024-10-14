@@ -163,6 +163,48 @@ class Submission:
     """The messages to send to ``url`` (collection [`dict`])."""
 
 
+def fan_out(next_visit, inst_config):
+    """Prepare fanned-out messages for sending to the Prompt Processing service.
+
+    Parameters
+    ----------
+    next_visit : `NextVisitModel`
+        The nextVisit message to fan out.
+    inst_config : `InstrumentConfig`
+        The configuration information for the active instrument.
+
+    Returns
+    -------
+    fanned_out : `Submission`
+        The submission information for the fanned-out messages.
+    """
+    return Submission(inst_config.url,
+                      next_visit.add_detectors(dataclasses.asdict(next_visit), inst_config.detectors)
+                      )
+
+
+def fan_out_hsc(next_visit, inst_config, detectors):
+    """Prepare fanned-out messages for HSC upload.py.
+
+    Parameters
+    ----------
+    next_visit : `NextVisitModel`
+        The nextVisit message to fan out.
+    inst_config : `InstrumentConfig`
+        The configuration information for the active instrument.
+    detectors : collection [`int`]
+        The detectors to send.
+
+    Returns
+    -------
+    fanned_out : `Submission`
+        The submission information for the fanned-out messages.
+    """
+    return Submission(inst_config.url,
+                      next_visit.add_detectors(dataclasses.asdict(next_visit), detectors)
+                      )
+
+
 @REQUEST_TIME.time()
 async def knative_request(
     in_process_requests_gauge,
@@ -332,30 +374,8 @@ async def main() -> None:
                     )
 
                     match next_visit_message_updated.instrument:
-                        case "LATISS":
-                            gauges["LATISS"].total_received.inc()
-                            send_info = Submission(
-                                instruments["LATISS"].url,
-                                next_visit_message_updated.add_detectors(
-                                    dataclasses.asdict(next_visit_message_updated),
-                                    instruments["LATISS"].detectors,
-                                )
-                            )
-                        case "LSSTComCamSim":
-                            gauges["LSSTComCamSim"].total_received.inc()
-                            send_info = Submission(
-                                instruments["LSSTComCamSim"].url,
-                                next_visit_message_updated.add_detectors(
-                                    dataclasses.asdict(next_visit_message_updated),
-                                    instruments["LSSTComCamSim"].detectors,
-                                )
-                            )
-                        case "LSSTComCam":
-                            logging.info(f"Ignore LSSTComCam message {next_visit_message_updated}"
-                                         " as the prompt service for this is not yet deployed.")
-                            continue
-                        case "LSSTCam":
-                            logging.info(f"Ignore LSSTCam message {next_visit_message_updated}"
+                        case "LSSTComCam" | "LSSTCam" as instrument:
+                            logging.info(f"Ignore {instrument} message {next_visit_message_updated}"
                                          " as the prompt service for this is not yet deployed.")
                             continue
                         case "HSC":
@@ -364,51 +384,19 @@ async def main() -> None:
                             match next_visit_message_updated.salIndex:
                                 case 999:  # HSC datasets from using upload_from_repo.py
                                     gauges["HSC"].total_received.inc()
-                                    send_info = Submission(
-                                        instruments["HSC"].url,
-                                        next_visit_message_updated.add_detectors(
-                                            dataclasses.asdict(next_visit_message_updated),
-                                            instruments["HSC"].detectors,
-                                        )
-                                    )
-                                case 59134:  # HSC upload.py test dataset
+                                    send_info = fan_out(next_visit_message_updated, instruments["HSC"])
+                                case visit if visit in hsc_upload_detectors:  # upload.py test datasets
                                     gauges["HSC"].total_received.inc()
-                                    send_info = Submission(
-                                        instruments["HSC"].url,
-                                        next_visit_message_updated.add_detectors(
-                                            dataclasses.asdict(next_visit_message_updated),
-                                            hsc_upload_detectors[59134],
-                                        )
-                                    )
-                                case 59142:  # HSC upload.py test dataset
-                                    gauges["HSC"].total_received.inc()
-                                    send_info = Submission(
-                                        instruments["HSC"].url,
-                                        next_visit_message_updated.add_detectors(
-                                            dataclasses.asdict(next_visit_message_updated),
-                                            hsc_upload_detectors[59142],
-                                        )
-                                    )
-                                case 59150:  # HSC upload.py test dataset
-                                    gauges["HSC"].total_received.inc()
-                                    send_info = Submission(
-                                        instruments["HSC"].url,
-                                        next_visit_message_updated.add_detectors(
-                                            dataclasses.asdict(next_visit_message_updated),
-                                            hsc_upload_detectors[59150],
-                                        )
-                                    )
-                                case 59160:  # HSC upload.py test dataset
-                                    gauges["HSC"].total_received.inc()
-                                    send_info = Submission(
-                                        instruments["HSC"].url,
-                                        next_visit_message_updated.add_detectors(
-                                            dataclasses.asdict(next_visit_message_updated),
-                                            hsc_upload_detectors[59160],
-                                        )
-                                    )
+                                    send_info = fan_out_hsc(next_visit_message_updated, instruments["HSC"],
+                                                            hsc_upload_detectors[visit])
+                                case _:
+                                    raise RuntimeError("No matching case for HSC "
+                                                       f"salIndex {next_visit_message_updated.salIndex}")
+                        case instrument if instrument in supported_instruments:
+                            gauges[instrument].total_received.inc()
+                            send_info = fan_out(next_visit_message_updated, instruments[instrument])
                         case _:
-                            raise Exception(
+                            raise RuntimeError(
                                 f"no matching case for instrument {next_visit_message_updated.instrument}."
                             )
 
