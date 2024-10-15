@@ -269,9 +269,6 @@ def make_fanned_out_messages(message: NextVisitModel,
         Raised if ``message`` cannot be fanned-out or sent.
     """
     match message.instrument:
-        case "LSSTComCam" | "LSSTCam" as instrument:
-            raise UnsupportedMessageError(f"Ignore {instrument} message {message}"
-                                          " as the prompt service for this is not yet deployed.")
         case "HSC":
             # HSC has extra active detector configurations just for the
             # upload.py test.
@@ -496,22 +493,25 @@ async def main() -> None:
 
             while True:  # run continously
                 async for msg in consumer:
-                    next_visit_message_initial = await deserializer.deserialize(
-                        data=msg.value
-                    )
-                    logging.info(f"message deserialized {next_visit_message_initial}")
-                    if not is_handleable(next_visit_message_initial["message"], expire):
-                        continue
+                    try:
+                        next_visit_message_initial = await deserializer.deserialize(
+                            data=msg.value
+                        )
+                        logging.info(f"message deserialized {next_visit_message_initial}")
+                        if not is_handleable(next_visit_message_initial["message"], expire):
+                            continue
 
-                    next_visit_message_updated = NextVisitModel.from_raw_message(
-                        next_visit_message_initial["message"]
-                    )
-                    send_info = make_fanned_out_messages(next_visit_message_updated,
-                                                         instruments,
-                                                         gauges,
-                                                         hsc_upload_detectors,
-                                                         )
-                    dispatch_fanned_out_messages(client, topic, tasks, send_info, gauges)
+                        next_visit_message_updated = NextVisitModel.from_raw_message(
+                            next_visit_message_initial["message"]
+                        )
+                        send_info = make_fanned_out_messages(next_visit_message_updated,
+                                                             instruments,
+                                                             gauges,
+                                                             hsc_upload_detectors,
+                                                             )
+                        dispatch_fanned_out_messages(client, topic, tasks, send_info, gauges)
+                    except UnsupportedMessageError:
+                        logging.exception("Could not process message, continuing.")
         finally:
             await consumer.stop()
 
