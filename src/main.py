@@ -453,8 +453,10 @@ async def main() -> None:
     security_protocol = os.environ["SECURITY_PROTOCOL"]
 
     # Logging config
-    logging.basicConfig(stream=sys.stdout, level=logging.INFO)
-    logging.basicConfig(stream=sys.stderr, level=logging.WARNING)
+    if os.environ.get("DEBUG_LOGS") == "true":
+        logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
+    else:
+        logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 
     conf = yaml.safe_load(Path(instrument_config_file).read_text())
     instruments = {inst: InstrumentConfig(conf, inst) for inst in supported_instruments}
