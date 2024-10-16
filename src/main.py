@@ -116,13 +116,12 @@ async def main() -> None:
     offset = os.environ["OFFSET"]
     expire = float(os.environ["MESSAGE_EXPIRATION"])
     kafka_schema_registry_url = os.environ["KAFKA_SCHEMA_REGISTRY_URL"]
-    latiss_knative_serving_url = os.environ["LATISS_KNATIVE_SERVING_URL"]
-    lsstcam_knative_serving_url = os.environ["LSSTCAM_KNATIVE_SERVING_URL"]
-    hsc_knative_serving_url = os.environ["HSC_KNATIVE_SERVING_URL"]
 
     # Keda environment variables
     prompt_processing_kafka_cluster = os.environ["PROMPT_PROCESSING_KAFKA_CLUSTER"]
-    fan_out_topic = os.environ["FAN_OUT_TOPIC"]
+    fan_out_comcamsim_topic = os.environ["FAN_OUT_COMCAMSIM_TOPIC"]
+    fan_out_hsc_topic = os.environ["FAN_OUT_HSC_TOPIC"]
+    fan_out_latiss_topic = os.environ["FAN_OUT_LATISS_TOPIC"]
     fan_out_security_protocol = os.environ["FAN_OUT_KAFKA_SECURITY_PROTOCOL"]
     fan_out_sasl_mechanism = os.environ["FAN_OUT_KAFKA_SASL_MECHANISM"]
     fan_out_sasl_username = os.environ["FAN_OUT_KAFKA_SASL_USERNAME"]
@@ -325,7 +324,7 @@ async def main() -> None:
                                     latiss_active_detectors,
                                 )
                             )
-                            knative_serving_url = latiss_knative_serving_url
+                            fan_out_topic = fan_out_latiss_topic
                             in_process_requests_gauge = latiss_in_process_requests_gauge
                         case "LSSTComCamSim":
                             lsstcomcamsim_gauge.inc()
@@ -336,7 +335,7 @@ async def main() -> None:
                                     lsstcomcam_active_detectors,
                                 )
                             )
-                            knative_serving_url = lsstcomcamsim_knative_serving_url
+                            fan_out_topic = fan_out_comcamsim_topic
                             in_process_requests_gauge = lsstcomcamsim_in_process_requests_gauge
                         case "LSSTComCam":
                             logging.info(f"Ignore LSSTComCam message {next_visit_message_updated}"
@@ -358,7 +357,7 @@ async def main() -> None:
                                             hsc_active_detectors,
                                         )
                                     )
-                                    knative_serving_url = hsc_knative_serving_url
+                                    fan_out_topic = fan_out_hsc_topic
                                     in_process_requests_gauge = hsc_in_process_requests_gauge
                                 case 59134:  # HSC upload.py test dataset
                                     hsc_gauge.inc()
@@ -368,7 +367,7 @@ async def main() -> None:
                                             hsc_active_detectors_59134,
                                         )
                                     )
-                                    knative_serving_url = hsc_knative_serving_url
+                                    fan_out_topic = fan_out_hsc_topic
                                     in_process_requests_gauge = hsc_in_process_requests_gauge
                                 case 59142:  # HSC upload.py test dataset
                                     hsc_gauge.inc()
@@ -378,7 +377,7 @@ async def main() -> None:
                                             hsc_active_detectors_59142,
                                         )
                                     )
-                                    knative_serving_url = hsc_knative_serving_url
+                                    fan_out_topic = fan_out_hsc_topic
                                     in_process_requests_gauge = hsc_in_process_requests_gauge
                                 case 59150:  # HSC upload.py test dataset
                                     hsc_gauge.inc()
@@ -388,7 +387,7 @@ async def main() -> None:
                                             hsc_active_detectors_59150,
                                         )
                                     )
-                                    knative_serving_url = hsc_knative_serving_url
+                                    fan_out_topic = fan_out_hsc_topic
                                     in_process_requests_gauge = hsc_in_process_requests_gauge
                                 case 59160:  # HSC upload.py test dataset
                                     hsc_gauge.inc()
@@ -398,7 +397,7 @@ async def main() -> None:
                                             hsc_active_detectors_59160,
                                         )
                                     )
-                                    knative_serving_url = hsc_knative_serving_url
+                                    fan_out_topic = fan_out_hsc_topic
                                     in_process_requests_gauge = hsc_in_process_requests_gauge
                         case _:
                             raise Exception(
