@@ -127,6 +127,10 @@ async def main() -> None:
     # Keda environment variables
     prompt_processing_kafka_cluster = os.environ["PROMPT_PROCESSING_KAFKA_CLUSTER"]
     fan_out_topic = os.environ["FAN_OUT_TOPIC"]
+    fan_out_security_protocol = os.environ["FAN_OUT_KAFKA_SECURITY_PROTOCOL"]
+    fan_out_sasl_mechanism = os.environ["FAN_OUT_KAFKA_SASL_MECHANISM"]
+    fan_out_sasl_username = os.environ["FAN_OUT_KAFKA_SASL_USERNAME"]
+    fan_out_sasl_password = os.environ["FAN_OUT_KAFKA_SASL_PASSWORD"]
 
     # kafka auth
     sasl_username = os.environ["SASL_USERNAME"]
@@ -409,7 +413,11 @@ async def main() -> None:
                         # https://aiokafka.readthedocs.io/en/stable/producer.html
                         producer = AIOKafkaProducer(
                             bootstrap_servers=prompt_processing_kafka_cluster,
-                            value_serializer=serializer
+                            value_serializer=serializer,
+                            security_protocol=fan_out_security_protocol,
+                            sasl_mechanism=fan_out_sasl_mechanism,
+                            sasl_plain_username=fan_out_sasl_username,
+                            sasl_plain_password=fan_out_sasl_password
                         )
                         await producer.start()
                         logging.info ("started kafka producer")
