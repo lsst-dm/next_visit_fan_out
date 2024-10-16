@@ -89,7 +89,7 @@ def detector_load(conf: dict, instrument: str) -> list[int]:
         The active detectors for the instrument.
     """
 
-    detectors = conf[instrument]["detectors"]
+    detectors = conf["detectors"][instrument]
     active_detectors: list[int] = []
     for detector, active in detectors.items():
         if active:
