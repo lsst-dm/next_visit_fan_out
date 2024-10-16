@@ -97,13 +97,12 @@ def detector_load(conf: dict, instrument: str) -> list[int]:
 
 async def fan_out_msg(
     producer,
-    fan_out_serializer,
     fan_out_topic,
     data
 ):
     await producer.start()
     logging.info(f"sending msg {data}")
-    await producer.send_and_wait(fan_out_topic, fan_out_serializer(data))
+    await producer.send_and_wait(fan_out_topic, data)
     await producer.stop()
 
 
@@ -425,7 +424,6 @@ async def main() -> None:
 
                                 fan_out_msg(
                                     producer,
-                                    fan_out_serializer,
                                     fan_out_topic,
                                     fan_out_message
                                 )
