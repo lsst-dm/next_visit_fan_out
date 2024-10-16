@@ -95,9 +95,6 @@ def detector_load(conf: dict, instrument: str) -> list[int]:
             active_detectors.append(k)
     return active_detectors
 
-def serializer(value):
-    return json.dumps(value).encode()
-
 async def fan_out_msg(
     producer,
     fan_out_serializer,
@@ -413,7 +410,7 @@ async def main() -> None:
                         # https://aiokafka.readthedocs.io/en/stable/producer.html
                         producer = AIOKafkaProducer(
                             bootstrap_servers=prompt_processing_kafka_cluster,
-                            value_serializer=serializer,
+                            value_serializer=fan_out_serializer,
                             security_protocol=fan_out_security_protocol,
                             sasl_mechanism=fan_out_sasl_mechanism,
                             sasl_plain_username=fan_out_sasl_username,
