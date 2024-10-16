@@ -301,7 +301,7 @@ async def main() -> None:
             """
             # Setup registry API
             fan_out_registry_api = RegistryApi(
-                fan_out_http_client=client, url="http://10.104.75.248:8081"
+                http_client=client, url="http://10.104.75.248:8081"
             )
             fan_out_registry_api.schemas.insert(fan_out_schema, 1)
             fan_out_serializer= await Serializer.register(
