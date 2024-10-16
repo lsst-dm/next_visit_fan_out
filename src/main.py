@@ -220,85 +220,32 @@ async def main() -> None:
             )
             deserializer = Deserializer(registry=registry_api)
 
-            # Schema
-            fan_out_schema = """
-            {
-                "$schema": "http://json-schema.org/draft-07/schema#",
-                "title": "Fanout",
-                "description": "Fanout message",
-                "type": "object",
-                "properties": {
-                    "salIndex": {
-                        "description": "sal Index",
-                        "type": "string"
-                    },
-                    "scriptSalIndex": {
-                        "description": "script sal index",
-                        "type": "string"
-                    },
-                    "instrument": {
-                        "description": "instrument",
-                        "type": "string"
-                    },
-                    "groupId": {
-                        "description": "group id",
-                        "type": "string"
-                    },
-                    "coordinateSystem": {
-                        "description": "coordinate system",
-                        "type": "string"
-                    },
-                    "position": {
-                        "description": "position",
-                        "type": "string"
-                    },
-                    "startTime": {
-                        "description": "start time",
-                        "type": "string"
-                    },
-                    "rotationSystem" :{
-                        "description": "rotation system",
-                        "type": "string"
-                    },
-                    "cameraAngle": {
-                        "description": "camera angle",
-                        "type": "string"
-                    },
-                    "filters": {
-                        "description": "filters",
-                        "type": "string"
-                    },
-                    "dome": {
-                        "description": "dome",
-                        "type": "string"
-                    },
-                    "duration": {
-                        "description": "duration",
-                        "type": "string"
-                    },
-                    "nimages": {
-                        "description": "number of images",
-                        "type": "string"
-                    },
-                    "survey": {
-                        "description": "survey",
-                        "type": "string"
-                    },
-                    "totalCheckpoints": {
-                        "description": "total checkpoints",
-                        "type": "string"
-                    },
-                    "private_sndStamp": {
-                        "description": "private send stamp",
-                        "type": "string"
-                    },
-                    "detector": {
-                        "description": "detector",
-                        "type": "string"
-                    }
-                }
+            # https://avro.apache.org/docs/1.11.1/specification/
+            fan_out_schema = {
+                "type": "record",
+                "name": "fanOut_nextVisit",
+                "namespace": "FanOut",
+                "fields": [
+                    {"name": "salIndex", "type": "long"},
+                    {"name": "scriptSalIndex", "type": "long"},
+                    {"name": "instrument", "type": "string"},
+                    {"name": "groupId", "type": "string"},
+                    {"name": "coordinateSystem", "type": "long"},
+                    {"name": "position", "type": {"type": "array", "items": "double"}},  # fix
+                    {"name": "startTime", "type": "double"},
+                    {"name": "rotationSystem", "type": "long"},
+                    {"name": "cameraAngle", "type": "double"},
+                    {"name": "filters", "type": "string"},
+                    {"name": "dome", "type": "long"},
+                    {"name": "duration", "type": "double"},
+                    {"name": "nimages", "type": "long"},
+                    {"name": "survey", "type": "string"},
+                    {"name": "totalCheckpoints", "type": "long"},
+                    {"name": "private_sndStamp", "type": "double"},
+                    {"name": "detector", "type": "int"},
+                ],
             }
-            """
+
             # Setup registry API
             fan_out_registry_api = RegistryApi(
                 http_client=client, url="http://10.104.75.248:8081"
