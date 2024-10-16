@@ -220,7 +220,7 @@ async def main() -> None:
             )
             deserializer = Deserializer(registry=registry_api)
 
-            # https://avro.apache.org/docs/1.11.1/specification/
+            # TODO review differences between types in avro schema and prompt processing https://avro.apache.org/docs/1.11.1/specification/
             fan_out_schema = {
                 "type": "record",
                 "name": "fanOut_nextVisit",
@@ -250,7 +250,6 @@ async def main() -> None:
             fan_out_registry_api = RegistryApi(
                 http_client=client, url="http://10.104.75.248:8081"
             )
-            fan_out_registry_api.schemas.insert(fan_out_schema, 1)
             fan_out_serializer= await Serializer.register(
                 registry=fan_out_registry_api,
                 schema=fan_out_schema
