@@ -445,6 +445,7 @@ async def main() -> None:
     offset = os.environ["OFFSET"]
     expire = float(os.environ["MESSAGE_EXPIRATION"])
     kafka_schema_registry_url = os.environ["KAFKA_SCHEMA_REGISTRY_URL"]
+    max_outgoing = int(os.environ["MAX_FAN_OUT_MESSAGES"])
 
     # kafka auth
     sasl_username = os.environ["SASL_USERNAME"]
@@ -484,7 +485,8 @@ async def main() -> None:
 
     tasks = set()
 
-    async with httpx.AsyncClient() as client:
+    limits = httpx.Limits(max_connections=max_outgoing)
+    async with httpx.AsyncClient(limits=limits) as client:
 
         try:
             # Setup kafka schema registry connection and deserialzer
