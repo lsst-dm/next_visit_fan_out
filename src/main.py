@@ -1,4 +1,5 @@
 import asyncio
+import collections.abc
 import dataclasses
 import datetime
 import json
@@ -30,7 +31,7 @@ class NextVisitModel:
     instrument: str
     groupId: str
     coordinateSystem: int
-    position: typing.List[int]
+    position: list[float]
     startTime: float
     rotationSystem: int
     cameraAngle: float
@@ -42,25 +43,58 @@ class NextVisitModel:
     totalCheckpoints: int
     private_sndStamp: float
 
-    def add_detectors(
-        self,
-        message: dict,
-        active_detectors: list,
-    ) -> list[dict[str, str]]:
-        """Adds and duplicates next visit messages for fanout.
+    @staticmethod
+    def from_raw_message(message: dict[str, typing.Any]):
+        """Factory creating a NextVisitModel from an unpacked message.
 
         Parameters
         ----------
-        message: `str`
-            The next visit message.
+        message : `dict` [`str`]
+            A mapping containing message fields.
+
+        Returns
+        -------
+        model : `NextVisitModel`
+            An object containing the fields in the message.
+        """
+        # Message may contain fields that aren't in NextVisitModel
+        return NextVisitModel(
+            salIndex=message["salIndex"],
+            scriptSalIndex=message["scriptSalIndex"],
+            instrument=message["instrument"],
+            groupId=message["groupId"],
+            coordinateSystem=message["coordinateSystem"],
+            position=message["position"],
+            startTime=message["startTime"],
+            rotationSystem=message["rotationSystem"],
+            cameraAngle=message["cameraAngle"],
+            filters=message["filters"],
+            dome=message["dome"],
+            duration=message["duration"],
+            nimages=message["nimages"],
+            survey=message["survey"],
+            totalCheckpoints=message["totalCheckpoints"],
+            private_sndStamp=message["private_sndStamp"],
+        )
+
+    def add_detectors(
+        self,
+        active_detectors: list,
+    ) -> list[dict[str, typing.Any]]:
+        """Adds and duplicates this message for fanout.
+
+        Parameters
+        ----------
         active_detectors: `list`
             The active detectors for an instrument.
-        Yields
-        ------
-        message_list : `list`
+
+        Returns
+        -------
+        message_list : `list` [`dict`]
             The message list for fan out.
         """
-        message_list: list[dict[str, str]] = []
+        message = dataclasses.asdict(self)
+        message_list: list[dict[str, typing.Any]] = []
         for active_detector in active_detectors:
             temp_message = message.copy()
             temp_message["detector"] = active_detector
@@ -73,28 +107,278 @@ class NextVisitModel:
         return message_list
 
 
-def detector_load(conf: dict, instrument: str) -> list[int]:
-    """Load active instrument detectors from yaml configiration file of
-    true false values for each detector.
+@dataclasses.dataclass(frozen=True)
+class InstrumentConfig:
+    """The configuration used for sending messages to a specific instrument.
 
     Parameters
     ----------
     conf : `dict`
-        The instrument configuration from the yaml file.
-    instrument: `str`
-        The instrument to load detectors for.
-    Yields
-    ------
-    active_detectors : `list`
-        The active detectors for the instrument.
+        A hierarchical instrument configuration, whose keys are instruments.
+    instrument : `str`
+        The instrument to configure.
     """
 
-    detectors = conf[instrument]["detectors"]
-    active_detectors: list[int] = []
-    for k, v in detectors.items():
-        if v:
-            active_detectors.append(k)
-    return active_detectors
+    instrument: str
+    """The instrument whose metrics are held by this object (`str`)."""
+    url: str
+    """The address of the Knative Serving instance for this instrument (`str`)."""
+    detectors: collections.abc.Sequence[int]
+    """The active detectors for this instrument (sequence [`int`])."""
+
+    def __init__(self, conf, instrument):
+        super().__setattr__("instrument", instrument)
+        super().__setattr__("url", conf["knative-urls"][instrument])
+        super().__setattr__("detectors", self.detector_load(conf, instrument))
+
+    @staticmethod
+    def detector_load(conf: dict, instrument: str) -> list[int]:
+        """Load active instrument detectors from yaml configiration file of
+        true false values for each detector.
+
+        Parameters
+        ----------
+        conf : `dict`
+            The instrument configuration from the yaml file.
+        instrument : `str`
+            The instrument to load detectors for.
+
+        Returns
+        -------
+        active_detectors : `list` [`int`]
+            The active detectors for the instrument.
+        """
+        detectors = conf["detectors"][instrument]
+        active_detectors: list[int] = []
+        for detector, active in detectors.items():
+            if active:
+                active_detectors.append(int(detector))
+        return active_detectors
+
+
+@dataclasses.dataclass(frozen=True)
+class Metrics:
+    """A container for all metrics associated with a specific instrument.
+
+    Parameters
+    ----------
+    instrument : `str`
+        The instrument whose metrics are held by this object.
+    """
+
+    instrument: str
+    """The instrument whose metrics are held by this object (`str`)."""
+    total_received: Gauge
+    """The number of incoming messages processed by this instance (`prometheus_client.Gauge`)."""
+    in_process: Gauge
+    """The number of fanned-out messages currently being processed (`prometheus_client.Gauge`)."""
+
+    def __init__(self, instrument):
+        super().__setattr__("instrument", instrument)
+        word_instrument = instrument.lower().replace(" ", "_")
+        super().__setattr__("total_received",
+                            Gauge(word_instrument + "_next_visit_messages",
+                                  f"next visit messages with {instrument} as instrument"))
+        super().__setattr__("in_process",
+                            Gauge(word_instrument + "_prompt_processing_in_process_requests",
+                                  f"{instrument} in process requests for next visit"))
+
+
+@dataclasses.dataclass(frozen=True)
+class Submission:
+    """The batched requests to be submitted to a Knative instance.
+    """
+
+    url: str
+    """The address of the Knative Serving instance to send requests to (`str`)."""
+    fan_out_messages: collections.abc.Collection[dict[str, typing.Any]]
+    """The messages to send to ``url`` (collection [`dict`])."""
+
+
+class UnsupportedMessageError(RuntimeError):
+    """Exception raised if there is no Prompt Processing instance for a given
+    nextVisit message.
+    """
+    pass
+
+
+def is_handleable(message: dict[str, typing.Any], expire: float) -> bool:
+    """Test whether a nextVisit message has enough data to be handled by
+    fan-out.
+
+    This function emits explanatory logs as a side effect.
+
+    Parameters
+    ----------
+    message : `dict` [`str`]
+        An unpacked mapping of message fields.
+    expire : `float`
+        The maximum age, in seconds, that a message can still be handled.
+
+    Returns
+    -------
+    handleable : `bool`
+        `True` is the message can be processed, `False` otherwise.
+    """
+    if not message["instrument"]:
+        logging.info("Message does not have an instrument. Assuming it's not an observation.")
+        return False
+
+    # efdStamp is visit publication, in seconds since 1970-01-01 UTC
+    if message["private_efdStamp"]:
+        published = message["private_efdStamp"]
+        age = round(time.time() - published)  # Microsecond precision is distracting
+        if age > expire:
+            logging.warning("Message published on %s UTC is %s old, ignoring.",
+                            time.ctime(published),
+                            datetime.timedelta(seconds=age)
+                            )
+            return False
+    else:
+        logging.warning("Message does not have private_efdStamp, can't determine age.")
+    return True
+
+
+def make_fanned_out_messages(message: NextVisitModel,
+                             instruments: collections.abc.Mapping[str, InstrumentConfig],
+                             gauges: collections.abc.Mapping[str, Metrics],
+                             hsc_upload_detectors: collections.abc.Mapping[int,
+                                                                           collections.abc.Collection[int]]
+                             ) -> Submission:
+    """Create appropriate fanned-out messages for an incoming message.
+
+    Parameters
+    ----------
+    message : `NextVisitModel`
+        The message to fan out.
+    instruments : mapping [`str`, `InstrumentConfig`]
+        A mapping from instrument name to configuration information.
+    gauges : mapping [`str`, `Metrics`]
+        A mapping from instrument name to metrics for that instrument.
+    hsc_upload_detectors : mapping [`int`, collection [`int`]]
+        A mapping from HSC-Cosmos visit to the supported detectors for that visit.
+
+    Returns
+    -------
+    send_info : `Submission`
+        The fanned out messages, along with where to send them.
+
+    Raises
+    ------
+    UnsupportedMessageError
+        Raised if ``message`` cannot be fanned-out or sent.
+    """
+    match message.instrument:
+        case "HSC":
+            # HSC has extra active detector configurations just for the
+            # upload.py test.
+            match message.salIndex:
+                case 999:  # HSC datasets from using upload_from_repo.py
+                    gauges["HSC"].total_received.inc()
+                    return fan_out(message, instruments["HSC"])
+                case visit if visit in hsc_upload_detectors:  # upload.py test datasets
+                    gauges["HSC"].total_received.inc()
+                    return fan_out_hsc(message, instruments["HSC"], hsc_upload_detectors[visit])
+                case _:
+                    raise UnsupportedMessageError(f"No matching case for HSC salIndex {message.salIndex}")
+        case instrument if instrument in instruments:
+            gauges[instrument].total_received.inc()
+            return fan_out(message, instruments[instrument])
+        case _:
+            raise UnsupportedMessageError(f"no matching case for instrument {message.instrument}.")
+
+
+def fan_out(next_visit, inst_config):
+    """Prepare fanned-out messages for sending to the Prompt Processing service.
+
+    Parameters
+    ----------
+    next_visit : `NextVisitModel`
+        The nextVisit message to fan out.
+    inst_config : `InstrumentConfig`
+        The configuration information for the active instrument.
+
+    Returns
+    -------
+    fanned_out : `Submission`
+        The submission information for the fanned-out messages.
+    """
+    return Submission(inst_config.url, next_visit.add_detectors(inst_config.detectors))
+
+
+def fan_out_hsc(next_visit, inst_config, detectors):
+    """Prepare fanned-out messages for HSC upload.py.
+
+    Parameters
+    ----------
+    next_visit : `NextVisitModel`
+        The nextVisit message to fan out.
+    inst_config : `InstrumentConfig`
+        The configuration information for the active instrument.
+    detectors : collection [`int`]
+        The detectors to send.
+
+    Returns
+    -------
+    fanned_out : `Submission`
+        The submission information for the fanned-out messages.
+    """
+    return Submission(inst_config.url, next_visit.add_detectors(detectors))
+
+
+def dispatch_fanned_out_messages(client: httpx.AsyncClient,
+                                 topic: str,
+                                 tasks: collections.abc.MutableSet[asyncio.Task],
+                                 send_info: Submission,
+                                 gauges: collections.abc.Mapping[str, Metrics],
+                                 ):
+    """Package and send the fanned-out messages to Prompt Processing.
+
+    Parameters
+    ----------
+    client : `httpx.AsyncClient`
+        The client to which to upload the messages.
+    topic : `str`
+        The topic to which to upload the messages.
+    tasks : set [`asyncio.Task`]
+        Collection for holding the requests.
+    send_info : `Submission`
+        The data and address to submit.
+    gauges : mapping [`str`, `Metrics`]
+        A mapping from instrument name to metrics for that instrument.
+    """
+    try:
+        attributes = {
+            "type": "com.example.kafka",
+            "source": topic,
+        }
+
+        for fan_out_message in send_info.fan_out_messages:
+            data = fan_out_message
+            data_json = json.dumps(data)
+
+            logging.info(f"data after json dump {data_json}")
+            event = CloudEvent(attributes, data_json)
+            headers, body = to_structured(event)
+            info = {
+                key: data[key] for key in ["instrument", "groupId", "detector"]
+            }
+
+            task = asyncio.create_task(
+                knative_request(
+                    gauges[fan_out_message["instrument"]].in_process,
+                    client,
+                    send_info.url,
+                    headers,
+                    body,
+                    str(info),
+                )
+            )
+            tasks.add(task)
+            task.add_done_callback(tasks.discard)
+
+    except ValueError:
+        logging.exception("Error while sending fanned-out messages.")
 
 
 @REQUEST_TIME.time()
@@ -122,53 +406,46 @@ async def knative_request(
         Information such as some fields of the next visit message to identify
         this request and to log with.
     """
-    in_process_requests_gauge.inc()
-
-    result = await client.post(
-        knative_serving_url,
-        headers=headers,
-        data=body,  # type:ignore
-        timeout=None,
-    )
-
-    logging.info(
-        f"nextVisit {info} status code {result.status_code} for initial request {result.content}"
-    )
-
-    '''
-    if result.status_code == 502 or result.status_code == 503:
-        logging.info(
-            f"retry after status code {result.status_code} for nextVisit {info}"
-        )
-        retry_result = await client.post(
+    with in_process_requests_gauge.track_inprogress():
+        result = await client.post(
             knative_serving_url,
             headers=headers,
             data=body,  # type:ignore
             timeout=None,
         )
-        logging.info(
-            f"nextVisit {info} retried request {retry_result.content}"
-        )
-    '''
 
-    in_process_requests_gauge.dec()
+        logging.info(
+            f"nextVisit {info} status code {result.status_code} for initial request {result.content}"
+        )
+
+        '''
+        if result.status_code == 502 or result.status_code == 503:
+            logging.info(
+                f"retry after status code {result.status_code} for nextVisit {info}"
+            )
+            retry_result = await client.post(
+                knative_serving_url,
+                headers=headers,
+                data=body,  # type:ignore
+                timeout=None,
+            )
+            logging.info(
+                f"nextVisit {info} retried request {retry_result.content}"
+            )
+        '''
 
 
 async def main() -> None:
-
     # Get environment variables
-    detector_config_file = os.environ["DETECTOR_CONFIG_FILE"]
+    supported_instruments = os.environ["SUPPORTED_INSTRUMENTS"].split()
+    instrument_config_file = os.environ["INSTRUMENT_CONFIG_FILE"]
     kafka_cluster = os.environ["KAFKA_CLUSTER"]
     group_id = os.environ["CONSUMER_GROUP"]
     topic = os.environ["NEXT_VISIT_TOPIC"]
     offset = os.environ["OFFSET"]
     expire = float(os.environ["MESSAGE_EXPIRATION"])
     kafka_schema_registry_url = os.environ["KAFKA_SCHEMA_REGISTRY_URL"]
-    latiss_knative_serving_url = os.environ["LATISS_KNATIVE_SERVING_URL"]
-    lsstcomcam_knative_serving_url = os.environ["LSSTCOMCAM_KNATIVE_SERVING_URL"]
-    lsstcomcamsim_knative_serving_url = os.environ["LSSTCOMCAMSIM_KNATIVE_SERVING_URL"]
-    lsstcam_knative_serving_url = os.environ["LSSTCAM_KNATIVE_SERVING_URL"]
-    hsc_knative_serving_url = os.environ["HSC_KNATIVE_SERVING_URL"]
+    max_outgoing = int(os.environ["MAX_FAN_OUT_MESSAGES"])
 
     # kafka auth
     sasl_username = os.environ["SASL_USERNAME"]
@@ -177,21 +454,16 @@ async def main() -> None:
     security_protocol = os.environ["SECURITY_PROTOCOL"]
 
     # Logging config
-    logging.basicConfig(stream=sys.stdout, level=logging.INFO)
-    logging.basicConfig(stream=sys.stderr, level=logging.WARNING)
+    if os.environ.get("DEBUG_LOGS") == "true":
+        logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
+    else:
+        logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 
-    conf = yaml.safe_load(Path(detector_config_file).read_text())
-
-    # list based on keys in config.  Data class
-    latiss_active_detectors = detector_load(conf, "LATISS")
-    lsstcomcam_active_detectors = detector_load(conf, "LSSTComCam")
-    lsstcam_active_detectors = detector_load(conf, "LSSTCam")
-    hsc_active_detectors = detector_load(conf, "HSC")
+    conf = yaml.safe_load(Path(instrument_config_file).read_text())
+    instruments = {inst: InstrumentConfig(conf, inst) for inst in supported_instruments}
     # These four groups are for the small dataset used in the upload.py test
-    hsc_active_detectors_59134 = detector_load(conf, "HSC-TEST-59134")
-    hsc_active_detectors_59142 = detector_load(conf, "HSC-TEST-59142")
-    hsc_active_detectors_59150 = detector_load(conf, "HSC-TEST-59150")
-    hsc_active_detectors_59160 = detector_load(conf, "HSC-TEST-59160")
+    hsc_upload_detectors = {visit: InstrumentConfig.detector_load(conf, f"HSC-TEST-{visit}")
+                            for visit in {59134, 59142, 59150, 59160}}
 
     # Start Prometheus endpoint
     start_http_server(8000)
@@ -207,53 +479,14 @@ async def main() -> None:
         sasl_plain_password=sasl_password,
     )
 
-    latiss_gauge = Gauge(
-        "latiss_next_visit_messages", "next visit nessages with latiss as instrument"
-    )
-    lsstcam_gauge = Gauge(
-        "lsstcam_next_visit_messages", "next visit nessages with lsstcam as instrument"
-    )
-    lsstcomcam_gauge = Gauge(
-        "lsstcomcam_next_visit_messages",
-        "next visit nessages with lsstcomcam as instrument",
-    )
-    lsstcomcamsim_gauge = Gauge(
-        "lsstcomcamsim_next_visit_messages",
-        "next visit nessages with lsstcomcamsim as instrument",
-    )
-    hsc_gauge = Gauge(
-        "hsc_next_visit_messages", "next visit nessages with hsc as instrument"
-    )
-    hsc_in_process_requests_gauge = Gauge(
-        "hsc_prompt_processing_in_process_requests",
-        "hsc in process requests for next visit",
-    )
-
-    latiss_in_process_requests_gauge = Gauge(
-        "latiss_prompt_processing_in_process_requests",
-        "latiss in process requests for next visit",
-    )
-
-    lsstcam_in_process_requests_gauge = Gauge(
-        "lsstcam_prompt_processing_in_process_requests",
-        "lsstcam in process requests for next visit",
-    )
-
-    lsstcomcam_in_process_requests_gauge = Gauge(
-        "lsstcomcam_prompt_processing_in_process_requests",
-        "lsstcomcam in process requests for next visit",
-    )
-
-    lsstcomcamsim_in_process_requests_gauge = Gauge(
-        "lsstcomcamsim_prompt_processing_in_process_requests",
-        "lsstcomcamsim in process requests for next visit",
-    )
+    gauges = {inst: Metrics(inst) for inst in supported_instruments}
 
     await consumer.start()
 
     tasks = set()
 
-    async with httpx.AsyncClient() as client:
+    limits = httpx.Limits(max_connections=max_outgoing)
+    async with httpx.AsyncClient(limits=limits) as client:
 
         try:
             # Setup kafka schema registry connection and deserialzer
@@ -264,184 +497,25 @@ async def main() -> None:
 
             while True:  # run continously
                 async for msg in consumer:
-
-                    next_visit_message_initial = await deserializer.deserialize(
-                        data=msg.value
-                    )
-
-                    logging.info(f"message deserialized {next_visit_message_initial}")
-
-                    if not next_visit_message_initial["message"]["instrument"]:
-                        logging.info("Message does not have an instrument. Assuming "
-                                     "it's not an observation.")
-                        continue
-
-                    # efdStamp is visit publication, in seconds since 1970-01-01 UTC
-                    if next_visit_message_initial["message"]["private_efdStamp"]:
-                        published = next_visit_message_initial["message"]["private_efdStamp"]
-                        age = round(time.time() - published)  # Microsecond precision is distracting
-                        if age > expire:
-                            logging.warning("Message published on %s UTC is %s old, ignoring.",
-                                            time.ctime(published),
-                                            datetime.timedelta(seconds=age)
-                                            )
-                            continue
-                    else:
-                        logging.warning("Message does not have private_efdStamp, can't determine age.")
-
-                    next_visit_message_updated = NextVisitModel(
-                        salIndex=next_visit_message_initial["message"]["salIndex"],
-                        scriptSalIndex=next_visit_message_initial["message"][
-                            "scriptSalIndex"
-                        ],
-                        instrument=next_visit_message_initial["message"]["instrument"],
-                        groupId=next_visit_message_initial["message"]["groupId"],
-                        coordinateSystem=next_visit_message_initial["message"][
-                            "coordinateSystem"
-                        ],
-                        position=next_visit_message_initial["message"]["position"],
-                        startTime=next_visit_message_initial["message"]["startTime"],
-                        rotationSystem=next_visit_message_initial["message"][
-                            "rotationSystem"
-                        ],
-                        cameraAngle=next_visit_message_initial["message"][
-                            "cameraAngle"
-                        ],
-                        filters=next_visit_message_initial["message"]["filters"],
-                        dome=next_visit_message_initial["message"]["dome"],
-                        duration=next_visit_message_initial["message"]["duration"],
-                        nimages=next_visit_message_initial["message"]["nimages"],
-                        survey=next_visit_message_initial["message"]["survey"],
-                        totalCheckpoints=next_visit_message_initial["message"][
-                            "totalCheckpoints"
-                        ],
-                        private_sndStamp=next_visit_message_initial["message"][
-                            "private_sndStamp"
-                        ],
-                    )
-
-                    match next_visit_message_updated.instrument:
-                        case "LATISS":
-                            latiss_gauge.inc()
-                            fan_out_message_list = (
-                                next_visit_message_updated.add_detectors(
-                                    dataclasses.asdict(next_visit_message_updated),
-                                    latiss_active_detectors,
-                                )
-                            )
-                            knative_serving_url = latiss_knative_serving_url
-                            in_process_requests_gauge = latiss_in_process_requests_gauge
-                        case "LSSTComCamSim":
-                            lsstcomcamsim_gauge.inc()
-                            fan_out_message_list = (
-                                next_visit_message_updated.add_detectors(
-                                    dataclasses.asdict(next_visit_message_updated),
-                                    # Just use ComCam active detector config.
-                                    lsstcomcam_active_detectors,
-                                )
-                            )
-                            knative_serving_url = lsstcomcamsim_knative_serving_url
-                            in_process_requests_gauge = lsstcomcamsim_in_process_requests_gauge
-                        case "LSSTComCam":
-                            logging.info(f"Ignore LSSTComCam message {next_visit_message_updated}"
-                                         " as the prompt service for this is not yet deployed.")
-                            continue
-                        case "LSSTCam":
-                            logging.info(f"Ignore LSSTCam message {next_visit_message_updated}"
-                                         " as the prompt service for this is not yet deployed.")
-                            continue
-                        case "HSC":
-                            # HSC has extra active detector configurations just for the
-                            # upload.py test.
-                            match next_visit_message_updated.salIndex:
-                                case 999:  # HSC datasets from using upload_from_repo.py
-                                    hsc_gauge.inc()
-                                    fan_out_message_list = (
-                                        next_visit_message_updated.add_detectors(
-                                            dataclasses.asdict(next_visit_message_updated),
-                                            hsc_active_detectors,
-                                        )
-                                    )
-                                    knative_serving_url = hsc_knative_serving_url
-                                    in_process_requests_gauge = hsc_in_process_requests_gauge
-                                case 59134:  # HSC upload.py test dataset
-                                    hsc_gauge.inc()
-                                    fan_out_message_list = (
-                                        next_visit_message_updated.add_detectors(
-                                            dataclasses.asdict(next_visit_message_updated),
-                                            hsc_active_detectors_59134,
-                                        )
-                                    )
-                                    knative_serving_url = hsc_knative_serving_url
-                                    in_process_requests_gauge = hsc_in_process_requests_gauge
-                                case 59142:  # HSC upload.py test dataset
-                                    hsc_gauge.inc()
-                                    fan_out_message_list = (
-                                        next_visit_message_updated.add_detectors(
-                                            dataclasses.asdict(next_visit_message_updated),
-                                            hsc_active_detectors_59142,
-                                        )
-                                    )
-                                    knative_serving_url = hsc_knative_serving_url
-                                    in_process_requests_gauge = hsc_in_process_requests_gauge
-                                case 59150:  # HSC upload.py test dataset
-                                    hsc_gauge.inc()
-                                    fan_out_message_list = (
-                                        next_visit_message_updated.add_detectors(
-                                            dataclasses.asdict(next_visit_message_updated),
-                                            hsc_active_detectors_59150,
-                                        )
-                                    )
-                                    knative_serving_url = hsc_knative_serving_url
-                                    in_process_requests_gauge = hsc_in_process_requests_gauge
-                                case 59160:  # HSC upload.py test dataset
-                                    hsc_gauge.inc()
-                                    fan_out_message_list = (
-                                        next_visit_message_updated.add_detectors(
-                                            dataclasses.asdict(next_visit_message_updated),
-                                            hsc_active_detectors_59160,
-                                        )
-                                    )
-                                    knative_serving_url = hsc_knative_serving_url
-                                    in_process_requests_gauge = hsc_in_process_requests_gauge
-                        case _:
-                            raise Exception(
-                                f"no matching case for instrument {next_visit_message_updated.instrument}."
-                            )
-
                     try:
-                        attributes = {
-                            "type": "com.example.kafka",
-                            "source": topic,
-                        }
+                        next_visit_message_initial = await deserializer.deserialize(
+                            data=msg.value
+                        )
+                        logging.info(f"message deserialized {next_visit_message_initial}")
+                        if not is_handleable(next_visit_message_initial["message"], expire):
+                            continue
 
-                        for fan_out_message in fan_out_message_list:
-                            data = fan_out_message
-                            data_json = json.dumps(data)
-
-                            logging.info(f"data after json dump {data_json}")
-                            event = CloudEvent(attributes, data_json)
-                            headers, body = to_structured(event)
-                            info = {
-                                key: data[key] for key in ["instrument", "groupId", "detector"]
-                            }
-
-                            task = asyncio.create_task(
-                                knative_request(
-                                    in_process_requests_gauge,
-                                    client,
-                                    knative_serving_url,
-                                    headers,
-                                    body,
-                                    str(info),
-                                )
-                            )
-                            tasks.add(task)
-                            task.add_done_callback(tasks.discard)
-
-                    except ValueError as e:
-                        logging.info("Error ", e)
-
+                        next_visit_message_updated = NextVisitModel.from_raw_message(
+                            next_visit_message_initial["message"]
+                        )
+                        send_info = make_fanned_out_messages(next_visit_message_updated,
+                                                             instruments,
+                                                             gauges,
+                                                             hsc_upload_detectors,
+                                                             )
+                        dispatch_fanned_out_messages(client, topic, tasks, send_info, gauges)
+                    except UnsupportedMessageError:
+                        logging.exception("Could not process message, continuing.")
         finally:
             await consumer.stop()
 
