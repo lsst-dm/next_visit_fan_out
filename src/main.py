@@ -103,6 +103,7 @@ async def fan_out_msg(
     await producer.start()
     logging.info(f"sending msg {data}")
     await producer.send_and_wait(fan_out_topic, data)
+    await producer.flush()
     await producer.stop()
 
 
