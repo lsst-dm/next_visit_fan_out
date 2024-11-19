@@ -445,7 +445,8 @@ async def knative_request(
                 timeout=None,
             )
             logging.info(
-                f"nextVisit {info} retried request {retry_result.content}"
+                f"nextVisit {info} status code {retry_result.status_code} for "
+                f"retried request {retry_result.content}"
             )
 
 
