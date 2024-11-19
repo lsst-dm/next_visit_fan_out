@@ -430,6 +430,11 @@ async def knative_request(
         )
 
         if retry and result.status_code == 503:
+            if 'Retry-After' in result.headers:
+                delay = int(result.headers['Retry-After'])
+                logging.info("Waiting %d seconds before retrying nextVisit %s...", delay, info)
+                await asyncio.sleep(delay)
+
             logging.info(
                 f"retry after status code {result.status_code} for nextVisit {info}"
             )
