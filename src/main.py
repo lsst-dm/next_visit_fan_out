@@ -420,8 +420,7 @@ async def knative_request(
             f"nextVisit {info} status code {result.status_code} for initial request {result.content}"
         )
 
-        '''
-        if result.status_code == 502 or result.status_code == 503:
+        if result.status_code == 503:
             logging.info(
                 f"retry after status code {result.status_code} for nextVisit {info}"
             )
@@ -434,7 +433,6 @@ async def knative_request(
             logging.info(
                 f"nextVisit {info} retried request {retry_result.content}"
             )
-        '''
 
 
 async def main() -> None:
