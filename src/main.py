@@ -394,15 +394,17 @@ async def knative_request(
 
     Parameters
     ----------
-    client: `httpx.AsyncClient`
+    in_process_requests_gauge : `prometheus_client.Gauge`
+        A gauge to be updated with the start and end of the request.
+    client : `httpx.AsyncClient`
         The async httpx client.
     knative_serving_url : `string`
         The url for the knative instance.
-    headers: dict[`str,'str']
+    headers : dict[`str,'str']
         The headers to pass to knative.
-    body: `bytes`
+    body : `bytes`
         The next visit message body.
-    info: `str`
+    info : `str`
         Information such as some fields of the next visit message to identify
         this request and to log with.
     """
