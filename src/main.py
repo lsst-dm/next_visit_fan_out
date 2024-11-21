@@ -352,9 +352,11 @@ def dispatch_fanned_out_messages(client: httpx.AsyncClient,
         Whether or not Knative requests can be retried.
     """
     try:
+
         attributes = {
             "type": "com.example.kafka",
             "source": topic,
+            "time": str(time.time())
         }
 
         for fan_out_message in send_info.fan_out_messages:
