@@ -125,6 +125,7 @@ async def main() -> None:
     # Keda environment variables
     prompt_processing_kafka_cluster = os.environ["PROMPT_PROCESSING_KAFKA_CLUSTER"]
     fan_out_comcamsim_topic = os.environ["FAN_OUT_COMCAMSIM_TOPIC"]
+    fan_out_comcam_topic = os.environ["FAN_OUT_COMCAM_TOPIC"]
     fan_out_hsc_topic = os.environ["FAN_OUT_HSC_TOPIC"]
     fan_out_latiss_topic = os.environ["FAN_OUT_LATISS_TOPIC"]
     fan_out_security_protocol = os.environ["FAN_OUT_KAFKA_SECURITY_PROTOCOL"]
@@ -349,7 +350,15 @@ async def main() -> None:
                         case "LSSTComCam":
                             logging.info(f"Ignore LSSTComCam message {next_visit_message_updated}"
                                          " as the prompt service for this is not yet deployed.")
-                            continue
+                            fan_out_message_list = (
+                                next_visit_message_updated.add_detectors(
+                                    dataclasses.asdict(next_visit_message_updated),
+                                    # Just use ComCam active detector config.
+                                    lsstcomcam_active_detectors,
+                                    fan_out_delivery_time,
+                                )
+                            )
+                            fan_out_topic = fan_out_comcam_topic
                         case "LSSTCam":
                             logging.info(f"Ignore LSSTCam message {next_visit_message_updated}"
                                          " as the prompt service for this is not yet deployed.")
