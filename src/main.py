@@ -124,6 +124,7 @@ async def main() -> None:
 
     # Keda environment variables
     prompt_processing_kafka_cluster = os.environ["PROMPT_PROCESSING_KAFKA_CLUSTER"]
+    fan_out_schema_registry_url = os.environ["FAN_OUT_SCHEMA_REGISTRY_URL"]
     fan_out_comcamsim_topic = os.environ["FAN_OUT_COMCAMSIM_TOPIC"]
     fan_out_comcam_topic = os.environ["FAN_OUT_COMCAM_TOPIC"]
     fan_out_hsc_topic = os.environ["FAN_OUT_HSC_TOPIC"]
@@ -253,7 +254,7 @@ async def main() -> None:
 
             # Setup registry API
             fan_out_registry_api = RegistryApi(
-                http_client=client, url="http://10.104.75.248:8081"
+                http_client=client, url=fan_out_schema_registry_url
             )
             fan_out_serializer= await Serializer.register(
                 registry=fan_out_registry_api,
