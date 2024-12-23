@@ -101,11 +101,10 @@ def detector_load(conf: dict, instrument: str) -> list[int]:
 
 async def fan_out_msg(
     redis_client,
-    fan_out_topic,
     data
 ):
     logging.info(f"sending msg {data}")
-    await redis_client.xadd(fan_out_topic, data)
+    await redis_client.xadd("instrument:lsstcomcamsim", data)
 
 async def main() -> None:
 
@@ -433,7 +432,6 @@ async def main() -> None:
 
                                 fan_out_msg(
                                     redis_client,
-                                    fan_out_topic,
                                     fan_out_message
                                 )
                             )
