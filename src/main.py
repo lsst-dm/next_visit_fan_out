@@ -425,8 +425,8 @@ async def main() -> None:
                     try:
                         redis_host = "10.108.11.86"
                         redis_client = redis.Redis(host=redis_host)
-                        logging.info(f"Redis Ping successful: {await client.ping()}")
-                        await client.aclose()
+                        logging.info(f"Redis Ping successful: {await redis_client.ping()}")
+                        await redis_client.aclose()
 
                         for fan_out_message in fan_out_message_list:
 
