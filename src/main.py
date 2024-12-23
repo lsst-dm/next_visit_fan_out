@@ -32,7 +32,7 @@ class NextVisitModel:
     groupId: str
     coordinateSystem: int
     #position: typing.List[int]
-    position: str #TODO check if list allowed after testing.
+    #position: str #TODO check if list allowed after testing.
     startTime: float
     rotationSystem: int
     cameraAngle: float
@@ -294,7 +294,7 @@ async def main() -> None:
                         coordinateSystem=next_visit_message_initial["message"][
                             "coordinateSystem"
                         ],
-                        position=next_visit_message_initial["message"]["position"],
+                        #position=next_visit_message_initial["message"]["position"],
                         startTime=next_visit_message_initial["message"]["startTime"],
                         rotationSystem=next_visit_message_initial["message"][
                             "rotationSystem"
