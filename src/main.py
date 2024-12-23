@@ -31,7 +31,8 @@ class NextVisitModel:
     instrument: str
     groupId: str
     coordinateSystem: int
-    position: typing.List[int]
+    #position: typing.List[int]
+    position: str #TODO check if list allowed after testing.
     startTime: float
     rotationSystem: int
     cameraAngle: float
@@ -47,7 +48,6 @@ class NextVisitModel:
         self,
         message: dict,
         active_detectors: list,
-        fan_out_delivery_time: str
     ) -> list[dict[str, str]]:
         """Adds and duplicates next visit messages for fanout.
 
@@ -56,9 +56,7 @@ class NextVisitModel:
         message: `str`
             The next visit message.
         active_detectors: `list`
-            The active detectors for an instrument.
-        fan_out_delivery_Time: `str`
-            The time that fan out sends the message in system time.    
+            The active detectors for an instrument. 
         Yields
         ------
         message_list : `list`
