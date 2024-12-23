@@ -32,7 +32,7 @@ class NextVisitModel:
     groupId: str
     coordinateSystem: int
     #position: typing.List[int]
-    #position: str #TODO check if list allowed after testing.
+    position: str #TODO check if list allowed after testing.
     startTime: float
     rotationSystem: int
     cameraAngle: float
@@ -65,6 +65,7 @@ class NextVisitModel:
         message_list: list[dict[str, str]] = []
         for active_detector in active_detectors:
             temp_message = message.copy()
+            temp_message["position"] = str(message["position"])   #TODO cleanup after redis testing
             temp_message["detector"] = active_detector
             # temporary change to modify short filter names to format expected by butler
             if temp_message["filters"] != "" and len(temp_message["filters"]) == 1:
@@ -294,7 +295,7 @@ async def main() -> None:
                         coordinateSystem=next_visit_message_initial["message"][
                             "coordinateSystem"
                         ],
-                        #position=next_visit_message_initial["message"]["position"],
+                        position=next_visit_message_initial["message"]["position"],
                         startTime=next_visit_message_initial["message"]["startTime"],
                         rotationSystem=next_visit_message_initial["message"][
                             "rotationSystem"
