@@ -268,8 +268,6 @@ async def main() -> None:
                                      "it's not an observation.")
                         continue
                     
-                    fan_out_delivery_time = time.time()
-                    
                     '''
                     # Temporary disable so we can see older messages for testing.
 
@@ -324,7 +322,6 @@ async def main() -> None:
                                 next_visit_message_updated.add_detectors(
                                     dataclasses.asdict(next_visit_message_updated),
                                     latiss_active_detectors,
-                                    fan_out_delivery_time,
                                 )
                             )
                             fan_out_topic = fan_out_latiss_topic
@@ -336,7 +333,6 @@ async def main() -> None:
                                     dataclasses.asdict(next_visit_message_updated),
                                     # Just use ComCam active detector config.
                                     lsstcomcam_active_detectors,
-                                    fan_out_delivery_time,
                                 )
                             )
                             fan_out_topic = fan_out_comcamsim_topic
@@ -346,7 +342,6 @@ async def main() -> None:
                                 next_visit_message_updated.add_detectors(
                                     dataclasses.asdict(next_visit_message_updated),
                                     lsstcomcam_active_detectors,
-                                    fan_out_delivery_time,
                                 )
                             )
                             fan_out_topic = fan_out_comcam_topic
@@ -364,7 +359,6 @@ async def main() -> None:
                                         next_visit_message_updated.add_detectors(
                                             dataclasses.asdict(next_visit_message_updated),
                                             hsc_active_detectors,
-                                            fan_out_delivery_time,
                                         )
                                     )
                                     fan_out_topic = fan_out_hsc_topic
@@ -375,7 +369,6 @@ async def main() -> None:
                                         next_visit_message_updated.add_detectors(
                                             dataclasses.asdict(next_visit_message_updated),
                                             hsc_active_detectors_59134,
-                                            fan_out_delivery_time,
                                         )
                                     )
                                     fan_out_topic = fan_out_hsc_topic
@@ -386,7 +379,6 @@ async def main() -> None:
                                         next_visit_message_updated.add_detectors(
                                             dataclasses.asdict(next_visit_message_updated),
                                             hsc_active_detectors_59142,
-                                            fan_out_delivery_time,
                                         )
                                     )
                                     fan_out_topic = fan_out_hsc_topic
@@ -397,7 +389,6 @@ async def main() -> None:
                                         next_visit_message_updated.add_detectors(
                                             dataclasses.asdict(next_visit_message_updated),
                                             hsc_active_detectors_59150,
-                                            fan_out_delivery_time,
                                         )
                                     )
                                     fan_out_topic = fan_out_hsc_topic
@@ -408,7 +399,6 @@ async def main() -> None:
                                         next_visit_message_updated.add_detectors(
                                             dataclasses.asdict(next_visit_message_updated),
                                             hsc_active_detectors_59160,
-                                            fan_out_delivery_time,
                                         )
                                     )
                                     fan_out_topic = fan_out_hsc_topic
