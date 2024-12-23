@@ -104,7 +104,6 @@ async def fan_out_msg(
     fan_out_topic,
     data
 ):
-    await redis_client.start()
     logging.info(f"sending msg {data}")
     await redis_client.xadd(fan_out_topic, data)
 
