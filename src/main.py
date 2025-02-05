@@ -175,7 +175,7 @@ class Metrics:
 
     def __init__(self, instrument):
         super().__setattr__("instrument", instrument)
-        word_instrument = instrument.lower().replace(" ", "_")
+        word_instrument = instrument.lower().replace(" ", "_").replace("-", "_")
         super().__setattr__("total_received",
                             Gauge(word_instrument + "_next_visit_messages",
                                   f"next visit messages with {instrument} as instrument"))
