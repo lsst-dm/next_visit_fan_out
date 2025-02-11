@@ -258,7 +258,7 @@ def make_fanned_out_messages(
     upload_test_detectors : mapping [`int`, collection [`int`]]
         A mapping from visit to the supported detectors for that visit.
         This is used by upload.py test where a smaller dataset is uploaded
-        for HSC.
+        for HSC and LSSTCam-imSim.
 
     Returns
     -------
@@ -271,18 +271,24 @@ def make_fanned_out_messages(
         Raised if ``message`` cannot be fanned-out or sent.
     """
     match message.instrument:
-        case "HSC":
-            # HSC has extra active detector configurations just for the
-            # upload.py test.
+        case "HSC" | "LSSTCam-imSim":
+            # HSC and LSSTCam-imSim have extra active detector configurations just
+            # for the upload.py test.
             match message.salIndex:
-                case 999:  # HSC datasets from using upload_from_repo.py
-                    gauges["HSC"].total_received.inc()
-                    return fan_out(message, instruments["HSC"])
+                case 999:  # Datasets from using upload_from_repo.py
+                    gauges[message.instrument].total_received.inc()
+                    return fan_out(message, instruments[message.instrument])
                 case visit if visit in upload_test_detectors:  # upload.py test datasets
-                    gauges["HSC"].total_received.inc()
-                    return fan_out_upload_test(message, instruments["HSC"], upload_test_detectors[visit])
+                    gauges[message.instrument].total_received.inc()
+                    return fan_out_upload_test(
+                        message,
+                        instruments[message.instrument],
+                        upload_test_detectors[visit],
+                    )
                 case _:
-                    raise UnsupportedMessageError(f"No matching case for HSC salIndex {message.salIndex}")
+                    raise UnsupportedMessageError(
+                        f"No matching case for {message.instrument} salIndex {message.salIndex}"
+                    )
         case instrument if instrument in instruments:
             gauges[instrument].total_received.inc()
             return fan_out(message, instruments[instrument])
@@ -479,9 +485,14 @@ async def main() -> None:
 
     conf = yaml.safe_load(Path(instrument_config_file).read_text())
     instruments = {inst: InstrumentConfig(conf, inst) for inst in supported_instruments}
-    # These four groups are for the small dataset used in the upload.py test
-    upload_test_detectors = {visit: InstrumentConfig.detector_load(conf, f"HSC-TEST-{visit}")
-                            for visit in {59134, 59142, 59150, 59160}}
+    # These groups are for the small datasets used in the upload.py test
+    upload_test_detectors = {
+        visit: InstrumentConfig.detector_load(conf, f"HSC-TEST-{visit}")
+        for visit in {59134, 59142, 59150, 59160}
+    } | {
+        visit: InstrumentConfig.detector_load(conf, f"LSSTCam-imSim-TEST-{visit}")
+        for visit in {496960, 496989}
+    }
 
     # Start Prometheus endpoint
     start_http_server(8000)
