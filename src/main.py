@@ -100,10 +100,11 @@ def detector_load(conf: dict, instrument: str) -> list[int]:
 
 async def fan_out_msg(
     redis_client,
+    redis_stream,
     data
 ):
     logging.info(f"sending msg {data}")
-    await redis_client.xadd("instrument:lsstcomcamsim", data)
+    await redis_client.xadd(redis_stream, data)
 
 async def main() -> None:
 
@@ -127,6 +128,9 @@ async def main() -> None:
     fan_out_sasl_mechanism = os.environ["FAN_OUT_KAFKA_SASL_MECHANISM"]
     fan_out_sasl_username = os.environ["FAN_OUT_KAFKA_SASL_USERNAME"]
     fan_out_sasl_password = os.environ["FAN_OUT_KAFKA_SASL_PASSWORD"]
+
+    # Redis environment variables
+    redis_stream = os.environ["REDIS_STREAM"]
 
     # kafka auth
     sasl_username = os.environ["SASL_USERNAME"]
@@ -421,6 +425,7 @@ async def main() -> None:
 
                                 fan_out_msg(
                                     redis_client,
+                                    redis_stream,
                                     fan_out_message
                                 )
                             )
