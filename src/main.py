@@ -18,6 +18,7 @@ from kafkit.registry import Deserializer
 from kafkit.registry.httpx import RegistryApi
 from prometheus_client import start_http_server, Summary  # type:ignore
 from prometheus_client import Gauge
+import redis.asyncio as redis
 import yaml
 
 REQUEST_TIME = Summary("request_processing_seconds", "Time spent processing request")
@@ -31,7 +32,7 @@ class NextVisitModel:
     instrument: str
     groupId: str
     coordinateSystem: int
-    position: list[float]
+    position: str #TODO check if list allowed after testing.
     startTime: float
     rotationSystem: int
     cameraAngle: float
@@ -98,6 +99,7 @@ class NextVisitModel:
         for active_detector in active_detectors:
             temp_message = message.copy()
             temp_message["detector"] = active_detector
+            temp_message["position"] = str(message["position"])   #TODO cleanup after redis testing
             # temporary change to modify short filter names to format expected by butler
             if temp_message["filters"] != "" and len(temp_message["filters"]) == 1:
                 temp_message["filters"] = (
@@ -123,12 +125,15 @@ class InstrumentConfig:
     """The instrument whose metrics are held by this object (`str`)."""
     url: str
     """The address of the Knative Serving instance for this instrument (`str`)."""
+    stream: str
+    """The name of the redis stream for this instrument (`str`)."""
     detectors: collections.abc.Sequence[int]
     """The active detectors for this instrument (sequence [`int`])."""
 
     def __init__(self, conf, instrument):
         super().__setattr__("instrument", instrument)
         super().__setattr__("url", conf["knative-urls"][instrument])
+        super().__setattr__("stream", conf["redis-streams"][instrument])
         super().__setattr__("detectors", self.detector_load(conf, instrument))
 
     @staticmethod
@@ -191,6 +196,8 @@ class Submission:
 
     url: str
     """The address of the Knative Serving instance to send requests to (`str`)."""
+    stream: str
+    """The redis stream (`str`)."""
     fan_out_messages: collections.abc.Collection[dict[str, typing.Any]]
     """The messages to send to ``url`` (collection [`dict`])."""
 
@@ -311,7 +318,7 @@ def fan_out(next_visit, inst_config):
     fanned_out : `Submission`
         The submission information for the fanned-out messages.
     """
-    return Submission(inst_config.url, next_visit.add_detectors(inst_config.detectors))
+    return Submission(inst_config.url, inst_config.stream, next_visit.add_detectors(inst_config.detectors))
 
 
 def fan_out_upload_test(next_visit, inst_config, detectors):
@@ -331,7 +338,7 @@ def fan_out_upload_test(next_visit, inst_config, detectors):
     fanned_out : `Submission`
         The submission information for the fanned-out messages.
     """
-    return Submission(inst_config.url, next_visit.add_detectors(detectors))
+    return Submission(inst_config.url, inst_config.stream, next_visit.add_detectors(detectors))
 
 
 def dispatch_fanned_out_messages(client: httpx.AsyncClient,
@@ -385,6 +392,41 @@ def dispatch_fanned_out_messages(client: httpx.AsyncClient,
                     body,
                     str(info),
                     retry=retry_knative,
+                )
+            )
+            tasks.add(task)
+            task.add_done_callback(tasks.discard)
+
+    except ValueError:
+        logging.exception("Error while sending fanned-out messages.")
+
+def dispatch_fanned_out_messages_redis_stream(
+                                 redis_client: redis.Redis,
+                                 tasks: collections.abc.MutableSet[asyncio.Task],
+                                 send_info: Submission,
+                                 ):
+    """Package and send the fanned-out messages to Prompt Processing.
+
+    Parameters
+    ----------
+    redis_client : `redis.Redis`
+        The redis client used to send the redis stream.
+    tasks : set [`asyncio.Task`]
+        Collection for holding the requests.
+    send_info : `Submission`
+        The data and address to submit.
+    """
+
+    stream = send_info.stream
+
+    try:
+        for fan_out_message in send_info.fan_out_messages:
+
+            task = asyncio.create_task(
+                redis_stream_request(
+                    redis_client,
+                    stream,
+                    fan_out_message,
                 )
             )
             tasks.add(task)
@@ -457,6 +499,31 @@ async def knative_request(
                 f"retried request {retry_result.content}"
             )
 
+async def redis_stream_request(
+    redis_client: redis.Redis,
+    redis_stream: str,
+    body: dict[str, typing.Any],
+) -> None:
+    """Makes redis stream request.
+
+    Parameters
+    ----------
+    in_process_requests_gauge : `prometheus_client.Gauge`
+        A gauge to be updated with the start and end of the request.
+    client : `redis.Redis`
+        The redis stream client.
+    redis_stream : `string`
+        The name of the redis stream.
+    body : `dict[str, typing.Any]`
+        The next visit message body.
+    """
+    
+    logging.info(f"sending msg {body} for redis stream {redis_stream}")
+    await redis_client.xadd(
+        redis_stream,
+        body
+    )
+
 
 async def main() -> None:
     # Get environment variables
@@ -470,6 +537,7 @@ async def main() -> None:
     kafka_schema_registry_url = os.environ["KAFKA_SCHEMA_REGISTRY_URL"]
     max_outgoing = int(os.environ["MAX_FAN_OUT_MESSAGES"])
     retry_knative = os.environ["RETRY_KNATIVE_REQUESTS"].lower() == "true"
+    redis_host = os.environ["REDIS_HOST"]
 
     # kafka auth
     sasl_username = os.environ["SASL_USERNAME"]
@@ -524,6 +592,9 @@ async def main() -> None:
             )
             deserializer = Deserializer(registry=registry_api)
 
+            redis_client = redis.Redis(host=redis_host)
+            await redis_client.aclose()
+
             while True:  # run continously
                 async for msg in consumer:
                     try:
@@ -542,8 +613,7 @@ async def main() -> None:
                                                              gauges,
                                                              upload_test_detectors,
                                                              )
-                        dispatch_fanned_out_messages(client, topic, tasks, send_info, gauges,
-                                                     retry_knative=retry_knative)
+                        dispatch_fanned_out_messages_redis_stream(redis_client, tasks, send_info)
                     except UnsupportedMessageError:
                         logging.exception("Could not process message, continuing.")
         finally:
