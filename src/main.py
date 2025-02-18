@@ -1,3 +1,24 @@
+# This file is part of next_visit_fan_out.
+#
+# Developed for the LSST Data Management System.
+# This product includes software developed by the LSST Project
+# (https://www.lsst.org).
+# See the COPYRIGHT file at the top-level directory of this distribution
+# for details of code ownership.
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 import asyncio
 import collections.abc
 import dataclasses
@@ -18,6 +39,10 @@ from kafkit.registry import Deserializer
 from kafkit.registry.httpx import RegistryApi
 from prometheus_client import start_http_server, Summary  # type:ignore
 from prometheus_client import Gauge
+import redis.asyncio as redis
+from redis.backoff import ExponentialBackoff
+from redis.exceptions import (ConnectionError, TimeoutError)
+from redis.retry import Retry
 import yaml
 
 REQUEST_TIME = Summary("request_processing_seconds", "Time spent processing request")
@@ -25,7 +50,7 @@ REQUEST_TIME = Summary("request_processing_seconds", "Time spent processing requ
 
 @dataclasses.dataclass
 class NextVisitModel:
-    "Next Visit Message"
+    """Next Visit Message"""
     salIndex: int
     scriptSalIndex: int
     instrument: str
@@ -107,6 +132,91 @@ class NextVisitModel:
         return message_list
 
 
+@dataclasses.dataclass
+class NextVisitModelKeda:
+    """Next Visit Message"""
+    salIndex: int
+    scriptSalIndex: int
+    instrument: str
+    groupId: str
+    coordinateSystem: int
+    position: str  # String because Redis Stream does not support lists.
+    startTime: float
+    rotationSystem: int
+    cameraAngle: float
+    filters: str
+    dome: int
+    duration: float
+    nimages: int
+    survey: str
+    totalCheckpoints: int
+    private_sndStamp: float
+
+    @staticmethod
+    def from_raw_message(message: dict[str, typing.Any]):
+        """Factory creating a NextVisitModel from an unpacked message.
+
+        Parameters
+        ----------
+        message : `dict` [`str`]
+            A mapping containing message fields.
+
+        Returns
+        -------
+        model : `NextVisitModelKeda`
+            An object containing the fields in the message.
+        """
+        # Message may contain fields that aren't in NextVisitModel
+        return NextVisitModelKeda(
+            salIndex=message["salIndex"],
+            scriptSalIndex=message["scriptSalIndex"],
+            instrument=message["instrument"],
+            groupId=message["groupId"],
+            coordinateSystem=message["coordinateSystem"],
+            position=message["position"],
+            startTime=message["startTime"],
+            rotationSystem=message["rotationSystem"],
+            cameraAngle=message["cameraAngle"],
+            filters=message["filters"],
+            dome=message["dome"],
+            duration=message["duration"],
+            nimages=message["nimages"],
+            survey=message["survey"],
+            totalCheckpoints=message["totalCheckpoints"],
+            private_sndStamp=message["private_sndStamp"],
+        )
+
+    def add_detectors(
+        self,
+        active_detectors: list,
+    ) -> list[dict[str, typing.Any]]:
+        """Adds and duplicates this message for fanout.
+
+        Parameters
+        ----------
+        active_detectors: `list`
+            The active detectors for an instrument.
+
+        Returns
+        -------
+        message_list : `list` [`dict`]
+            The message list for fan out.
+        """
+        message = dataclasses.asdict(self)
+        message_list: list[dict[str, typing.Any]] = []
+        for active_detector in active_detectors:
+            temp_message = message.copy()
+            temp_message["detector"] = active_detector
+            temp_message["position"] = str(message["position"])
+            # temporary change to modify short filter names to format expected by butler
+            if temp_message["filters"] != "" and len(temp_message["filters"]) == 1:
+                temp_message["filters"] = (
+                    "SDSS" + temp_message["filters"] + "_65mm~empty"
+                )
+            message_list.append(temp_message)
+        return message_list
+
+
 @dataclasses.dataclass(frozen=True)
 class InstrumentConfig:
     """The configuration used for sending messages to a specific instrument.
@@ -123,12 +233,15 @@ class InstrumentConfig:
     """The instrument whose metrics are held by this object (`str`)."""
     url: str
     """The address of the Knative Serving instance for this instrument (`str`)."""
+    stream: str
+    """The name of the redis stream for this instrument (`str`)."""
     detectors: collections.abc.Sequence[int]
     """The active detectors for this instrument (sequence [`int`])."""
 
     def __init__(self, conf, instrument):
         super().__setattr__("instrument", instrument)
         super().__setattr__("url", conf["knative-urls"][instrument])
+        super().__setattr__("stream", conf["redis-streams"][instrument])
         super().__setattr__("detectors", self.detector_load(conf, instrument))
 
     @staticmethod
@@ -191,6 +304,8 @@ class Submission:
 
     url: str
     """The address of the Knative Serving instance to send requests to (`str`)."""
+    stream: str
+    """The redis stream (`str`)."""
     fan_out_messages: collections.abc.Collection[dict[str, typing.Any]]
     """The messages to send to ``url`` (collection [`dict`])."""
 
@@ -311,7 +426,7 @@ def fan_out(next_visit, inst_config):
     fanned_out : `Submission`
         The submission information for the fanned-out messages.
     """
-    return Submission(inst_config.url, next_visit.add_detectors(inst_config.detectors))
+    return Submission(inst_config.url, inst_config.stream, next_visit.add_detectors(inst_config.detectors))
 
 
 def fan_out_upload_test(next_visit, inst_config, detectors):
@@ -331,7 +446,7 @@ def fan_out_upload_test(next_visit, inst_config, detectors):
     fanned_out : `Submission`
         The submission information for the fanned-out messages.
     """
-    return Submission(inst_config.url, next_visit.add_detectors(detectors))
+    return Submission(inst_config.url, inst_config.stream, next_visit.add_detectors(detectors))
 
 
 def dispatch_fanned_out_messages(client: httpx.AsyncClient,
@@ -385,6 +500,41 @@ def dispatch_fanned_out_messages(client: httpx.AsyncClient,
                     body,
                     str(info),
                     retry=retry_knative,
+                )
+            )
+            tasks.add(task)
+            task.add_done_callback(tasks.discard)
+
+    except ValueError:
+        logging.exception("Error while sending fanned-out messages.")
+
+
+def dispatch_fanned_out_messages_redis_stream(redis_client: redis.Redis,
+                                              tasks: collections.abc.MutableSet[asyncio.Task],
+                                              send_info: Submission,
+                                              ):
+    """Package and send the fanned-out messages to Prompt Processing.
+
+    Parameters
+    ----------
+    redis_client : `redis.Redis`
+        The redis client used to send the redis stream.
+    tasks : set [`asyncio.Task`]
+        Collection for holding the requests.
+    send_info : `Submission`
+        The data and address to submit.
+    """
+
+    stream = send_info.stream
+
+    try:
+        for fan_out_message in send_info.fan_out_messages:
+
+            task = asyncio.create_task(
+                redis_stream_request(
+                    redis_client,
+                    stream,
+                    fan_out_message,
                 )
             )
             tasks.add(task)
@@ -458,6 +608,30 @@ async def knative_request(
             )
 
 
+async def redis_stream_request(
+    redis_client: redis.Redis,
+    redis_stream: str,
+    body: dict[str, typing.Any],
+) -> None:
+    """Makes redis stream request.
+
+    Parameters
+    ----------
+    redis_client : `redis.Redis`
+        The redis stream client.
+    redis_stream : `str`
+        The name of the redis stream.
+    body : `dict` [`str`, `typing.Any`]
+        The next visit message body.
+    """
+
+    redis_entry_id = await redis_client.xadd(
+        redis_stream,
+        body
+    )
+    logging.info(f"Sent msg {body} for redis stream {redis_stream} with id {redis_entry_id}")
+
+
 async def main() -> None:
     # Get environment variables
     supported_instruments = os.environ["SUPPORTED_INSTRUMENTS"].split()
@@ -470,6 +644,18 @@ async def main() -> None:
     kafka_schema_registry_url = os.environ["KAFKA_SCHEMA_REGISTRY_URL"]
     max_outgoing = int(os.environ["MAX_FAN_OUT_MESSAGES"])
     retry_knative = os.environ["RETRY_KNATIVE_REQUESTS"].lower() == "true"
+    # Platform that prompt processing will run on
+    platform = os.environ["PLATFORM"].lower()
+    # Redis Stream cluster
+    redis_host = os.environ["REDIS_HOST"]
+    # Maximum delay time for Redis retries in seconds
+    redis_retry_delay_cap = int(os.environ.get("REDIS_RETRY_DELAY_CAP", 5))
+    # Initial delay for first Redis retry in seconds
+    redis_retry_initial_delay = int(os.environ.get("REDIS_RETRY_INITIAL_DELAY", 1))
+    # Redis max retry count
+    redis_retry_count = int(os.environ.get("REDIS_RETRY_COUNT", 3))
+    # Redis health check interval
+    redis_health_check_interval = int(os.environ.get("REDIS_HEALTH_CHECK_INTERVAL", 3))
 
     # kafka auth
     sasl_username = os.environ["SASL_USERNAME"]
@@ -524,6 +710,16 @@ async def main() -> None:
             )
             deserializer = Deserializer(registry=registry_api)
 
+            # Redis client setup with retry and exponential backoff
+            # https://redis.io/kb/doc/22wxq63j93/how-to-manage-client-reconnections-in-case-of-errors-with-redis-py
+            redis_client = redis.Redis(host=redis_host,
+                                       retry=Retry(ExponentialBackoff(cap=redis_retry_delay_cap,
+                                                                      base=redis_retry_initial_delay),
+                                                   redis_retry_count),
+                                       retry_on_error=[ConnectionError, TimeoutError, ConnectionResetError],
+                                       health_check_interval=redis_health_check_interval)
+            await redis_client.aclose()
+
             while True:  # run continously
                 async for msg in consumer:
                     try:
@@ -535,16 +731,27 @@ async def main() -> None:
                         if not is_handleable(next_visit_message_initial["message"], expire):
                             continue
 
-                        next_visit_message_updated = NextVisitModel.from_raw_message(
-                            next_visit_message_initial["message"]
-                        )
-                        send_info = make_fanned_out_messages(next_visit_message_updated,
-                                                             instruments,
-                                                             gauges,
-                                                             upload_test_detectors,
-                                                             )
-                        dispatch_fanned_out_messages(client, topic, tasks, send_info, gauges,
-                                                     retry_knative=retry_knative)
+                        if platform == "knative":
+                            next_visit_message_updated = NextVisitModel.from_raw_message(
+                                next_visit_message_initial["message"]
+                            )
+                            send_info = make_fanned_out_messages(next_visit_message_updated,
+                                                                 instruments,
+                                                                 gauges,
+                                                                 upload_test_detectors)
+                            dispatch_fanned_out_messages(client, topic, tasks, send_info, gauges,
+                                                         retry_knative=retry_knative)
+                        elif platform == "keda":
+                            next_visit_message_updated = NextVisitModelKeda.from_raw_message(
+                                next_visit_message_initial["message"]
+                            )
+                            send_info = make_fanned_out_messages(next_visit_message_updated,
+                                                                 instruments,
+                                                                 gauges,
+                                                                 upload_test_detectors)
+                            dispatch_fanned_out_messages_redis_stream(redis_client, tasks, send_info)
+                        else:
+                            raise ValueError("no valid platform defined")
                     except UnsupportedMessageError:
                         logging.exception("Could not process message, continuing.")
         finally:
