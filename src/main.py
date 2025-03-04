@@ -530,6 +530,7 @@ async def main() -> None:
                         next_visit_message_initial = await deserializer.deserialize(
                             data=msg.value
                         )
+                        logging.info(f"message offset {msg.offset} and timestamp {msg.timestamp}")
                         logging.info(f"message deserialized {next_visit_message_initial}")
                         if not is_handleable(next_visit_message_initial["message"], expire):
                             continue
