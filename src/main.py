@@ -19,6 +19,9 @@ from kafkit.registry.httpx import RegistryApi
 from prometheus_client import start_http_server, Summary  # type:ignore
 from prometheus_client import Gauge
 import redis.asyncio as redis
+from redis.backoff import ExponentialBackoff
+from redis.exceptions import (ConnectionError, ConnectionResetError, TimeoutError)
+from redis.retry import Retry
 import yaml
 
 REQUEST_TIME = Summary("request_processing_seconds", "Time spent processing request")
@@ -541,6 +544,14 @@ async def main() -> None:
     platform = os.environ["PLATFORM"].lower()
     # Redis Stream cluster
     redis_stream_host = os.environ["REDIS_HOST"]
+    # Maximum delay time for Redis retries in seconds
+    redis_retry_delay_cap = int(os.environ["REDIS_RETRY_DELAY_CAP"], 5)
+    # Initial delay for first Redis retry in seconds
+    redis_retry_initial_delay = int(os.environ["REDIS_RETRY_INITIAL_DELAY"], 1)
+    # Redis max retry count
+    redis_retry_count = int(os.environ["REDIS_RETRY_COUNT"], 3)
+    # Redis health check interval
+    redis_health_check_interval = int(os.environ["REDIS_HEALTH_CHECK_INTERVAL"], 3)
 
     # kafka auth
     sasl_username = os.environ["SASL_USERNAME"]
@@ -595,7 +606,12 @@ async def main() -> None:
             )
             deserializer = Deserializer(registry=registry_api)
 
-            redis_client = redis.Redis(host=redis_stream_host)
+            # Reids client setup with retry and exponential backoff
+            # https://redis.io/kb/doc/22wxq63j93/how-to-manage-client-reconnections-in-case-of-errors-with-redis-py
+            redis_client = redis.Redis(host=redis_stream_host,
+                                       retry=Retry(ExponentialBackoff(cap=redis_retry_delay_cap, base=redis_retry_initial_delay), redis_retry_count),
+                                       retry_on_error=[ConnectionError, TimeoutError, ConnectionResetError],
+                                       health_check_interval=redis_health_check_interval)
             await redis_client.aclose()
 
             while True:  # run continously
