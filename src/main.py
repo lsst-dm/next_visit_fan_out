@@ -518,11 +518,11 @@ async def redis_stream_request(
         The next visit message body.
     """
     
-    logging.info(f"sending msg {body} for redis stream {redis_stream}")
-    await redis_client.xadd(
+    redis_entry_id = await redis_client.xadd(
         redis_stream,
         body
     )
+    logging.info(f"Sent msg {body} for redis stream {redis_stream} with id {redis_entry_id}")
 
 
 async def main() -> None:
