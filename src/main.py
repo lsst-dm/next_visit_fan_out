@@ -537,7 +537,10 @@ async def main() -> None:
     kafka_schema_registry_url = os.environ["KAFKA_SCHEMA_REGISTRY_URL"]
     max_outgoing = int(os.environ["MAX_FAN_OUT_MESSAGES"])
     retry_knative = os.environ["RETRY_KNATIVE_REQUESTS"].lower() == "true"
-    redis_host = os.environ["REDIS_HOST"]
+    # Platform that prompt processing will run on
+    platform = os.environ["PLATFORM"].lower()
+    # Redis Stream cluster
+    redis_stream_host = os.environ["REDIS_HOST"]
 
     # kafka auth
     sasl_username = os.environ["SASL_USERNAME"]
@@ -592,7 +595,7 @@ async def main() -> None:
             )
             deserializer = Deserializer(registry=registry_api)
 
-            redis_client = redis.Redis(host=redis_host)
+            redis_client = redis.Redis(host=redis_stream_host)
             await redis_client.aclose()
 
             while True:  # run continously
@@ -614,7 +617,16 @@ async def main() -> None:
                                                              gauges,
                                                              upload_test_detectors,
                                                              )
-                        dispatch_fanned_out_messages_redis_stream(redis_client, tasks, send_info)
+                        if platform == "knative":
+                           dispatch_fanned_out_messages(client, topic, tasks, send_info, gauges,
+                                                     retry_knative=retry_knative)
+                           logging.info("starting knative instance")
+                        elif platform == "keda":
+                           dispatch_fanned_out_messages_redis_stream(redis_client, tasks, send_info)
+                           logging.info("starting keda instance")
+                        else:
+                            logging.info("no platform defined")
+
                     except UnsupportedMessageError:
                         logging.exception("Could not process message, continuing.")
         finally:
