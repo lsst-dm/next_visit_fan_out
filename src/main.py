@@ -542,22 +542,26 @@ async def main() -> None:
     retry_knative = os.environ["RETRY_KNATIVE_REQUESTS"].lower() == "true"
     # Platform that prompt processing will run on
     platform = os.environ["PLATFORM"].lower()
-    # Redis Stream cluster
-    redis_stream_host = os.environ["REDIS_HOST"]
-    # Maximum delay time for Redis retries in seconds
-    redis_retry_delay_cap = int(os.environ["REDIS_RETRY_DELAY_CAP"], 5)
-    # Initial delay for first Redis retry in seconds
-    redis_retry_initial_delay = int(os.environ["REDIS_RETRY_INITIAL_DELAY"], 1)
-    # Redis max retry count
-    redis_retry_count = int(os.environ["REDIS_RETRY_COUNT"], 3)
-    # Redis health check interval
-    redis_health_check_interval = int(os.environ["REDIS_HEALTH_CHECK_INTERVAL"], 3)
-
     # kafka auth
     sasl_username = os.environ["SASL_USERNAME"]
     sasl_password = os.environ["SASL_PASSWORD"]
     sasl_mechanism = os.environ["SASL_MECHANISM"]
     security_protocol = os.environ["SECURITY_PROTOCOL"]
+
+
+    # Conditionally load keda environment variables
+    if platform == "keda":
+            # Redis Stream cluster
+            redis_stream_host = os.environ["REDIS_HOST"]
+            # Maximum delay time for Redis retries in seconds
+            redis_retry_delay_cap = int(os.environ["REDIS_RETRY_DELAY_CAP"], 5)
+            # Initial delay for first Redis retry in seconds
+            redis_retry_initial_delay = int(os.environ["REDIS_RETRY_INITIAL_DELAY"], 1)
+            # Redis max retry count
+            redis_retry_count = int(os.environ["REDIS_RETRY_COUNT"], 3)
+            # Redis health check interval
+            redis_health_check_interval = int(os.environ["REDIS_HEALTH_CHECK_INTERVAL"], 3)
+
 
     # Logging config
     if os.environ.get("DEBUG_LOGS") == "true":
