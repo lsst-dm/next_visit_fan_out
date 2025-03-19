@@ -20,7 +20,7 @@ from prometheus_client import start_http_server, Summary  # type:ignore
 from prometheus_client import Gauge
 import redis.asyncio as redis
 from redis.backoff import ExponentialBackoff
-from redis.exceptions import (ConnectionError, ConnectionResetError, TimeoutError)
+from redis.exceptions import (ConnectionError, TimeoutError)
 from redis.retry import Retry
 import yaml
 
@@ -614,7 +614,7 @@ async def main() -> None:
             # https://redis.io/kb/doc/22wxq63j93/how-to-manage-client-reconnections-in-case-of-errors-with-redis-py
             redis_client = redis.Redis(host=redis_stream_host,
                                        retry=Retry(ExponentialBackoff(cap=redis_retry_delay_cap, base=redis_retry_initial_delay), redis_retry_count),
-                                       retry_on_error=[ConnectionError, TimeoutError, ConnectionResetError],
+                                       retry_on_error=[ConnectionError, TimeoutError],
                                        health_check_interval=redis_health_check_interval)
             await redis_client.aclose()
 
