@@ -554,13 +554,13 @@ async def main() -> None:
             # Redis Stream cluster
             redis_stream_host = os.environ["REDIS_HOST"]
             # Maximum delay time for Redis retries in seconds
-            redis_retry_delay_cap = int(os.environ["REDIS_RETRY_DELAY_CAP"], 5)
+            redis_retry_delay_cap = int(os.getenv("REDIS_RETRY_DELAY_CAP", 5))
             # Initial delay for first Redis retry in seconds
-            redis_retry_initial_delay = int(os.environ["REDIS_RETRY_INITIAL_DELAY"], 1)
+            redis_retry_initial_delay = int(os.getenv("REDIS_RETRY_INITIAL_DELAY", 1))
             # Redis max retry count
-            redis_retry_count = int(os.environ["REDIS_RETRY_COUNT"], 3)
+            redis_retry_count = int(os.getenv("REDIS_RETRY_COUNT", 3))
             # Redis health check interval
-            redis_health_check_interval = int(os.environ["REDIS_HEALTH_CHECK_INTERVAL"], 3)
+            redis_health_check_interval = int(os.getenv("REDIS_HEALTH_CHECK_INTERVAL", 3))
 
 
     # Logging config
