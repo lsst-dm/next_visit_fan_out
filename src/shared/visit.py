@@ -42,7 +42,6 @@ class NextVisitModelBase:
     totalCheckpoints: int
     private_sndStamp: float
 
-    @classmethod
     def add_detectors(
         self,
         active_detectors: list,
@@ -136,7 +135,7 @@ class NextVisitModelKnative(NextVisitModelBase):
             instrument=message["instrument"],
             groupId=message["groupId"],
             coordinateSystem=message["coordinateSystem"],
-            position=str(message["position"]),  # Adds position as string
+            position=message["position"],
             startTime=message["startTime"],
             rotationSystem=message["rotationSystem"],
             cameraAngle=message["cameraAngle"],
