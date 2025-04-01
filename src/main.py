@@ -259,7 +259,7 @@ def make_fanned_out_messages_knative(
     upload_test_detectors : mapping [`int`, collection [`int`]]
         A mapping from visit to the supported detectors for that visit.
         This is used by upload.py test where a smaller dataset is uploaded
-        for HSC and LSSTCam-imSim.
+        for HSC, LSSTCam, and LSSTCam-imSim.
 
     Returns
     -------
@@ -272,11 +272,11 @@ def make_fanned_out_messages_knative(
         Raised if ``message`` cannot be fanned-out or sent.
     """
     match message.instrument:
-        case "HSC" | "LSSTCam-imSim":
-            # HSC and LSSTCam-imSim have extra active detector configurations just
+        case "HSC" | "LSSTCam" | "LSSTCam-imSim":
+            # HSC, LSSTCam, and LSSTCam-imSim have extra active detector configurations just
             # for the upload.py test.
             match message.salIndex:
-                case 999:  # Datasets from using upload_from_repo.py
+                case 999 | 1:  # Datasets from using upload_from_repo.py
                     gauges[message.instrument].total_received.inc()
                     return fan_out(message, instruments[message.instrument])
                 case visit if visit in upload_test_detectors:  # upload.py test datasets
@@ -561,6 +561,9 @@ async def main() -> None:
     upload_test_detectors = {
         visit: InstrumentConfig.detector_load(conf, f"HSC-TEST-{visit}")
         for visit in {59134, 59142, 59150, 59160}
+    } | {
+        visit: InstrumentConfig.detector_load(conf, f"LSSTCam-TEST-{visit}")
+        for visit in {5025031700001, 2025031700001}
     } | {
         visit: InstrumentConfig.detector_load(conf, f"LSSTCam-imSim-TEST-{visit}")
         for visit in {496960, 496989}
