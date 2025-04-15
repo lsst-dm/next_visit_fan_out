@@ -225,30 +225,27 @@ def make_fanned_out_messages(
         if gauges is not None:
             gauges[instrument].total_received.inc()
 
-    match message.instrument:
-        case "HSC" | "LSSTCam-imSim":
+    match (message.instrument, message.salIndex):
+        case ("HSC" | "LSSTCam-imSim", 999):
+            # Datasets from using upload_from_repo.py
+            increment_gauge(message.instrument)
+            return fan_out(message, instruments[message.instrument])
+        case ("HSC" | "LSSTCam-imSim", visit) if visit in upload_test_detectors:
             # HSC and LSSTCam-imSim have extra active detector configurations just
-            # for the upload.py test.
-            match message.salIndex:
-                case 999:  # Datasets from using upload_from_repo.py
-                    increment_gauge(message.instrument)
-                    return fan_out(message, instruments[message.instrument])
-                case visit if visit in upload_test_detectors:  # upload.py test datasets
-                    increment_gauge(message.instrument)
-                    return fan_out_upload_test(
-                        message,
-                        instruments[message.instrument],
-                        upload_test_detectors[visit],
-                    )
-                case _:
-                    raise UnsupportedMessageError(
-                        f"No matching case for {message.instrument} salIndex {message.salIndex}"
-                    )
-        case instrument if instrument in instruments:
+            # for the upload.py test datasets.
+            increment_gauge(message.instrument)
+            return fan_out_upload_test(
+                message,
+                instruments[message.instrument],
+                upload_test_detectors[visit],
+            )
+        case (instrument, _) if instrument in instruments:
             increment_gauge(instrument)
             return fan_out(message, instruments[instrument])
         case _:
-            raise UnsupportedMessageError(f"no matching case for instrument {message.instrument}.")
+            raise UnsupportedMessageError(
+                f"No matching case for instrument {message.instrument} salIndex {message.salIndex}"
+            )
 
 
 def fan_out(next_visit, inst_config):
