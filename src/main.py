@@ -27,6 +27,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import ssl
 import sys
 import time
 import typing
@@ -569,6 +570,11 @@ async def main() -> None:
     # Start Prometheus endpoint
     start_http_server(8000)
 
+    # Create ssl context for Kafka consumer
+    ssl_context = context = ssl.create_default_context()
+    ssl_context.check_hostname = False # TODO set to true when migrated to prompt-kafka
+    ssl_context.verify_mode=ssl.CERT_NONE # TODO enable when migrated to prompt-kafka
+
     consumer = AIOKafkaConsumer(
         topic,
         bootstrap_servers=kafka_cluster,
@@ -578,6 +584,7 @@ async def main() -> None:
         sasl_mechanism=sasl_mechanism,
         sasl_plain_username=sasl_username,
         sasl_plain_password=sasl_password,
+        ssl_context=ssl_context,
     )
 
     gauges = {inst: Metrics(inst) for inst in supported_instruments}
