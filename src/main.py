@@ -46,7 +46,7 @@ from redis.exceptions import (ConnectionError, TimeoutError)
 from redis.retry import Retry
 import yaml
 
-from shared.visit import NextVisitModelKeda, NextVisitModelKnative
+from shared.visit import NextVisitModelBase, NextVisitModelKeda, NextVisitModelKnative
 
 REQUEST_TIME = Summary("request_processing_seconds", "Time spent processing request")
 
@@ -188,79 +188,27 @@ def is_handleable(message: dict[str, typing.Any], expire: float) -> bool:
     return True
 
 
-def make_fanned_out_messages_keda(
-    message: NextVisitModelKeda,
+def make_fanned_out_messages(
+    message: NextVisitModelBase,
     instruments: collections.abc.Mapping[str, InstrumentConfig],
     upload_test_detectors: collections.abc.Mapping[int, collections.abc.Collection[int]],
-) -> Submission:
-    """Create appropriate fanned-out messages for an incoming message for Keda.
-
-    Parameters
-    ----------
-    message : `NextVisitModel`
-        The message to fan out.
-    instruments : mapping [`str`, `InstrumentConfig`]
-        A mapping from instrument name to configuration information.
-    gauges : mapping [`str`, `Metrics`]
-        A mapping from instrument name to metrics for that instrument.
-    upload_test_detectors : mapping [`int`, collection [`int`]]
-        A mapping from visit to the supported detectors for that visit.
-        This is used by upload.py test where a smaller dataset is uploaded
-        for HSC and LSSTCam-imSim.
-
-    Returns
-    -------
-    send_info : `Submission`
-        The fanned out messages, along with where to send them.
-
-    Raises
-    ------
-    UnsupportedMessageError
-        Raised if ``message`` cannot be fanned-out or sent.
-    """
-    match message.instrument:
-        case "HSC" | "LSSTCam-imSim":
-            # HSC and LSSTCam-imSim have extra active detector configurations just
-            # for the upload.py test.
-            match message.salIndex:
-                case 999:  # Datasets from using upload_from_repo.py
-                    return fan_out(message, instruments[message.instrument])
-                case visit if visit in upload_test_detectors:  # upload.py test datasets
-                    return fan_out_upload_test(
-                        message,
-                        instruments[message.instrument],
-                        upload_test_detectors[visit],
-                    )
-                case _:
-                    raise UnsupportedMessageError(
-                        f"No matching case for {message.instrument} salIndex {message.salIndex}"
-                    )
-        case instrument if instrument in instruments:
-            return fan_out(message, instruments[instrument])
-        case _:
-            raise UnsupportedMessageError(f"no matching case for instrument {message.instrument}.")
-
-
-def make_fanned_out_messages_knative(
-    message: NextVisitModelKnative,
-    instruments: collections.abc.Mapping[str, InstrumentConfig],
-    gauges: collections.abc.Mapping[str, Metrics],
-    upload_test_detectors: collections.abc.Mapping[int, collections.abc.Collection[int]],
+    gauges: collections.abc.Mapping[str, Metrics]=None,
 ) -> Submission:
     """Create appropriate fanned-out messages for an incoming message.
 
     Parameters
     ----------
-    message : `NextVisitModel`
+    message : `NextVisitModelBase`
         The message to fan out.
     instruments : mapping [`str`, `InstrumentConfig`]
         A mapping from instrument name to configuration information.
-    gauges : mapping [`str`, `Metrics`]
-        A mapping from instrument name to metrics for that instrument.
     upload_test_detectors : mapping [`int`, collection [`int`]]
         A mapping from visit to the supported detectors for that visit.
         This is used by upload.py test where a smaller dataset is uploaded
-        for HSC and LSSTCam-imSim.
+        for HSC, LSSTCam, and LSSTCam-imSim.
+    gauges : mapping [`str`, `Metrics`], optional
+        A mapping from instrument name to metrics for that instrument.
+        Required for Knative; should be None for KEDA.
 
     Returns
     -------
@@ -272,30 +220,32 @@ def make_fanned_out_messages_knative(
     UnsupportedMessageError
         Raised if ``message`` cannot be fanned-out or sent.
     """
-    match message.instrument:
-        case "HSC" | "LSSTCam-imSim":
-            # HSC and LSSTCam-imSim have extra active detector configurations just
-            # for the upload.py test.
-            match message.salIndex:
-                case 999:  # Datasets from using upload_from_repo.py
-                    gauges[message.instrument].total_received.inc()
-                    return fan_out(message, instruments[message.instrument])
-                case visit if visit in upload_test_detectors:  # upload.py test datasets
-                    gauges[message.instrument].total_received.inc()
-                    return fan_out_upload_test(
-                        message,
-                        instruments[message.instrument],
-                        upload_test_detectors[visit],
-                    )
-                case _:
-                    raise UnsupportedMessageError(
-                        f"No matching case for {message.instrument} salIndex {message.salIndex}"
-                    )
-        case instrument if instrument in instruments:
+    def increment_gauge(instrument):
+        # This is only used with the Knative platform.
+        if gauges is not None:
             gauges[instrument].total_received.inc()
+
+    match (message.instrument, message.salIndex):
+        case ("HSC" | "LSSTCam-imSim", 999):
+            # Datasets from using upload_from_repo.py
+            increment_gauge(message.instrument)
+            return fan_out(message, instruments[message.instrument])
+        case ("HSC" | "LSSTCam" | "LSSTCam-imSim", visit) if visit in upload_test_detectors:
+            # HSC, LSSTCam, and LSSTCam-imSim have extra active detector configurations
+            # just for the upload.py test datasets.
+            increment_gauge(message.instrument)
+            return fan_out_upload_test(
+                message,
+                instruments[message.instrument],
+                upload_test_detectors[visit],
+            )
+        case (instrument, _) if instrument in instruments:
+            increment_gauge(instrument)
             return fan_out(message, instruments[instrument])
         case _:
-            raise UnsupportedMessageError(f"no matching case for instrument {message.instrument}.")
+            raise UnsupportedMessageError(
+                f"No matching case for instrument {message.instrument} salIndex {message.salIndex}"
+            )
 
 
 def fan_out(next_visit, inst_config):
@@ -563,6 +513,9 @@ async def main() -> None:
         visit: InstrumentConfig.detector_load(conf, f"HSC-TEST-{visit}")
         for visit in {59134, 59142, 59150, 59160}
     } | {
+        visit: InstrumentConfig.detector_load(conf, f"LSSTCam-TEST-{visit}")
+        for visit in {2025031700001, 2025031700002}
+    } | {
         visit: InstrumentConfig.detector_load(conf, f"LSSTCam-imSim-TEST-{visit}")
         for visit in {496960, 496989}
     }
@@ -628,19 +581,19 @@ async def main() -> None:
                             next_visit_message_updated = NextVisitModelKnative.from_raw_message(
                                 next_visit_message_initial["message"]
                             )
-                            send_info = make_fanned_out_messages_knative(next_visit_message_updated,
-                                                                         instruments,
-                                                                         gauges,
-                                                                         upload_test_detectors)
+                            send_info = make_fanned_out_messages(next_visit_message_updated,
+                                                                 instruments,
+                                                                 upload_test_detectors,
+                                                                 gauges)
                             dispatch_fanned_out_messages_knative(client, topic, tasks, send_info, gauges,
                                                                  retry_knative=retry_knative)
                         elif platform == "keda":
                             next_visit_message_updated = NextVisitModelKeda.from_raw_message(
                                 next_visit_message_initial["message"]
                             )
-                            send_info = make_fanned_out_messages_keda(next_visit_message_updated,
-                                                                      instruments,
-                                                                      upload_test_detectors)
+                            send_info = make_fanned_out_messages(next_visit_message_updated,
+                                                                 instruments,
+                                                                 upload_test_detectors)
                             dispatch_fanned_out_messages_redis_stream(redis_client, tasks, send_info)
                         else:
                             raise ValueError("no valid platform defined")
