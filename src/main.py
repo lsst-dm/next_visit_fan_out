@@ -66,7 +66,9 @@ class InstrumentConfig:
     instrument: str
     """The instrument whose metrics are held by this object (`str`)."""
     url: str
-    """The address of the Knative Serving instance for this instrument (`str`)."""
+    """The address of the Knative Serving instance for this instrument
+    (`str`).
+    """
     stream: str
     """The name of the redis stream for this instrument (`str`)."""
     detectors: collections.abc.Sequence[int]
@@ -116,9 +118,13 @@ class Metrics:
     instrument: str
     """The instrument whose metrics are held by this object (`str`)."""
     total_received: Gauge
-    """The number of incoming messages processed by this instance (`prometheus_client.Gauge`)."""
+    """The number of incoming messages processed by this instance
+    (`prometheus_client.Gauge`).
+    """
     in_process: Gauge
-    """The number of fanned-out messages currently being processed (`prometheus_client.Gauge`)."""
+    """The number of fanned-out messages currently being processed
+    (`prometheus_client.Gauge`).
+    """
 
     def __init__(self, instrument):
         super().__setattr__("instrument", instrument)
@@ -137,7 +143,8 @@ class Submission:
     """
 
     url: str
-    """The address of the Knative Serving instance to send requests to (`str`)."""
+    """The address of the Knative Serving instance to send requests to (`str`).
+    """
     stream: str
     """The redis stream (`str`)."""
     fan_out_messages: collections.abc.Collection[dict[str, typing.Any]]
@@ -192,7 +199,7 @@ def make_fanned_out_messages(
     message: NextVisitModelBase,
     instruments: collections.abc.Mapping[str, InstrumentConfig],
     upload_test_detectors: collections.abc.Mapping[int, collections.abc.Collection[int]],
-    gauges: collections.abc.Mapping[str, Metrics]=None,
+    gauges: collections.abc.Mapping[str, Metrics] = None,
 ) -> Submission:
     """Create appropriate fanned-out messages for an incoming message.
 
@@ -231,8 +238,8 @@ def make_fanned_out_messages(
             increment_gauge(message.instrument)
             return fan_out(message, instruments[message.instrument])
         case ("HSC" | "LSSTCam" | "LSSTCam-imSim", visit) if visit in upload_test_detectors:
-            # HSC, LSSTCam, and LSSTCam-imSim have extra active detector configurations
-            # just for the upload.py test datasets.
+            # HSC, LSSTCam, and LSSTCam-imSim have extra active detector
+            # configurations just for the upload.py test datasets.
             increment_gauge(message.instrument)
             return fan_out_upload_test(
                 message,
@@ -249,7 +256,8 @@ def make_fanned_out_messages(
 
 
 def fan_out(next_visit, inst_config):
-    """Prepare fanned-out messages for sending to the Prompt Processing service.
+    """Prepare fanned-out messages for sending to the Prompt Processing
+    service.
 
     Parameters
     ----------
@@ -524,9 +532,9 @@ async def main() -> None:
     start_http_server(8000)
 
     # Create ssl context for Kafka consumer
-    ssl_context = context = ssl.create_default_context()
-    ssl_context.check_hostname = False # TODO set to true when migrated to prompt-kafka
-    ssl_context.verify_mode=ssl.CERT_NONE # TODO enable when migrated to prompt-kafka
+    ssl_context = ssl.create_default_context()
+    ssl_context.check_hostname = False  # TODO set to true when migrated to prompt-kafka
+    ssl_context.verify_mode = ssl.CERT_NONE  # TODO enable when migrated to prompt-kafka
 
     consumer = AIOKafkaConsumer(
         topic,
