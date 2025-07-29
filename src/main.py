@@ -212,7 +212,7 @@ def make_fanned_out_messages(
     upload_test_detectors : mapping [`int`, collection [`int`]]
         A mapping from visit to the supported detectors for that visit.
         This is used by upload.py test where a smaller dataset is uploaded
-        for HSC, LSSTCam, and LSSTCam-imSim.
+        for HSC and LSSTCam.
     gauges : mapping [`str`, `Metrics`], optional
         A mapping from instrument name to metrics for that instrument.
         Required for Knative; should be None for KEDA.
@@ -233,12 +233,12 @@ def make_fanned_out_messages(
             gauges[instrument].total_received.inc()
 
     match (message.instrument, message.salIndex):
-        case ("HSC" | "LSSTCam-imSim", 999):
+        case ("HSC", 999):
             # Datasets from using upload_from_repo.py
             increment_gauge(message.instrument)
             return fan_out(message, instruments[message.instrument])
-        case ("HSC" | "LSSTCam" | "LSSTCam-imSim", visit) if visit in upload_test_detectors:
-            # HSC, LSSTCam, and LSSTCam-imSim have extra active detector
+        case ("HSC" | "LSSTCam", visit) if visit in upload_test_detectors:
+            # HSC and LSSTCam have extra active detector
             # configurations just for the upload.py test datasets.
             increment_gauge(message.instrument)
             return fan_out_upload_test(
@@ -523,9 +523,6 @@ async def main() -> None:
     } | {
         visit: InstrumentConfig.detector_load(conf, f"LSSTCam-TEST-{visit}")
         for visit in {2025050100367, 2025050100395, 2025050100463, 2025050100499, 2025050100553}
-    } | {
-        visit: InstrumentConfig.detector_load(conf, f"LSSTCam-imSim-TEST-{visit}")
-        for visit in {496960, 496989}
     }
 
     # Start Prometheus endpoint
