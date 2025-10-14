@@ -521,7 +521,9 @@ async def main() -> None:
         logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 
     conf = yaml.safe_load(Path(instrument_config_file).read_text())
-    instruments = {inst: InstrumentConfig(conf, inst) for inst in supported_instruments}
+    known_instruments = {inst for inst in conf["detectors"].keys() if "-TEST-" not in inst}
+    logging.debug("Known instruments: %s", known_instruments)
+    instruments = {inst: InstrumentConfig(conf, inst) for inst in known_instruments}
     # These groups are for the small datasets used in the upload.py test
     upload_test_detectors = {
         visit: InstrumentConfig.detector_load(conf, f"HSC-TEST-{visit}")
@@ -551,7 +553,7 @@ async def main() -> None:
         ssl_context=ssl_context,
     )
 
-    gauges = {inst: Metrics(inst) for inst in supported_instruments}
+    gauges = {inst: Metrics(inst) for inst in known_instruments}
 
     await consumer.start()
 
