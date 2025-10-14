@@ -601,7 +601,7 @@ async def main() -> None:
                                                                  upload_test_detectors)
                             dispatch_fanned_out_messages_redis_stream(redis_client, tasks, send_info)
                         else:
-                            raise ValueError("no valid platform defined")
+                            raise ValueError(f"no valid platform defined, got '{platform}'")
                     except UnsupportedMessageError:
                         logging.exception("Could not process message, continuing.")
         finally:
