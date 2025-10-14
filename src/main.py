@@ -158,9 +158,10 @@ class UnsupportedMessageError(RuntimeError):
     pass
 
 
-def is_handleable(message: dict[str, typing.Any], expire: float) -> bool:
-    """Test whether a nextVisit message has enough data to be handled by
-    fan-out.
+def is_handleable(message: dict[str, typing.Any],
+                  expire: float,
+                  active_instruments: collections.abc.Collection[str]) -> bool:
+    """Test whether a nextVisit message should be handled by fan-out.
 
     This function emits explanatory logs as a side effect.
 
@@ -170,6 +171,8 @@ def is_handleable(message: dict[str, typing.Any], expire: float) -> bool:
         An unpacked mapping of message fields.
     expire : `float`
         The maximum age, in seconds, that a message can still be handled.
+    active_instruments : collection [`str`]
+        The set of instruments whose messages should be handled.
 
     Returns
     -------
@@ -178,6 +181,9 @@ def is_handleable(message: dict[str, typing.Any], expire: float) -> bool:
     """
     if not message["instrument"]:
         logging.info("Message does not have an instrument. Assuming it's not an observation.")
+        return False
+    if message["instrument"] not in active_instruments:
+        logging.info(f"Instrument {message['instrument']} is not active, ignoring.")
         return False
 
     # efdStamp is visit publication, in seconds since 1970-01-01 UTC
@@ -579,7 +585,9 @@ async def main() -> None:
                         )
                         logging.info(f"message offset {msg.offset} and timestamp {msg.timestamp}")
                         logging.info(f"message deserialized {next_visit_message_initial}")
-                        if not is_handleable(next_visit_message_initial["message"], expire):
+                        if not is_handleable(next_visit_message_initial["message"],
+                                             expire,
+                                             supported_instruments):
                             continue
 
                         if platform == "knative":
