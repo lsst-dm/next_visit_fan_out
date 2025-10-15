@@ -158,6 +158,41 @@ class UnsupportedMessageError(RuntimeError):
     pass
 
 
+class UsdfJsonFormatter(logging.Formatter):
+    """A formatter that can be parsed by the Loki/Grafana system at USDF.
+
+    The formatter's output is a JSON-encoded message with "flattened" metadata
+    to make it easy to inspect with Grafana filters.
+    """
+    def format(self, record):
+        # format updates record.message, but the full info is *only* in the
+        # return value.
+        msg = super().format(record)
+
+        # Many LogRecord attributes are only useful for interrogating the
+        # record in Python; filter to what's useful in Grafana.
+        entry = {
+            # formatTime only automatically handles msecs (uuu) with the
+            # default format, and the assumption that they're the last part of
+            # the string is hardcoded. Use manual formatting instead.
+            # RFC3339Nano is the only buit-in promtail format that supports
+            # fractional seconds.
+            "asctime": self.formatTime(record, datefmt='%Y-%m-%dT%H:%M:%S.%(msecs)03d%z')
+            % {"msecs": record.msecs},
+            "funcName": record.funcName,
+            "level": record.levelname,  # "level" auto-parsed by Grafana
+            "levelno": record.levelno,
+            "lineno": record.lineno,
+            "message": msg,
+            "name": record.name,
+            "pathname": record.pathname,
+            "process": record.process,
+            "thread": record.thread,
+        }
+
+        return json.dumps(entry)
+
+
 def is_handleable(message: dict[str, typing.Any],
                   expire: float,
                   active_instruments: collections.abc.Collection[str]) -> bool:
@@ -515,10 +550,12 @@ async def main() -> None:
     security_protocol = os.environ["SECURITY_PROTOCOL"]
 
     # Logging config
+    log_handler = logging.StreamHandler(stream=sys.stdout)
+    log_handler.setFormatter(UsdfJsonFormatter())
     if os.environ.get("DEBUG_LOGS") == "true":
-        logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
+        logging.basicConfig(handlers=[log_handler], level=logging.DEBUG)
     else:
-        logging.basicConfig(stream=sys.stdout, level=logging.INFO)
+        logging.basicConfig(handlers=[log_handler], level=logging.INFO)
 
     conf = yaml.safe_load(Path(instrument_config_file).read_text())
     known_instruments = {inst for inst in conf["detectors"].keys() if "-TEST-" not in inst}
