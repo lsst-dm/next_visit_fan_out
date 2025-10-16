@@ -158,9 +158,45 @@ class UnsupportedMessageError(RuntimeError):
     pass
 
 
-def is_handleable(message: dict[str, typing.Any], expire: float) -> bool:
-    """Test whether a nextVisit message has enough data to be handled by
-    fan-out.
+class UsdfJsonFormatter(logging.Formatter):
+    """A formatter that can be parsed by the Loki/Grafana system at USDF.
+
+    The formatter's output is a JSON-encoded message with "flattened" metadata
+    to make it easy to inspect with Grafana filters.
+    """
+    def format(self, record):
+        # format updates record.message, but the full info is *only* in the
+        # return value.
+        msg = super().format(record)
+
+        # Many LogRecord attributes are only useful for interrogating the
+        # record in Python; filter to what's useful in Grafana.
+        entry = {
+            # formatTime only automatically handles msecs (uuu) with the
+            # default format, and the assumption that they're the last part of
+            # the string is hardcoded. Use manual formatting instead.
+            # RFC3339Nano is the only buit-in promtail format that supports
+            # fractional seconds.
+            "asctime": self.formatTime(record, datefmt='%Y-%m-%dT%H:%M:%S.%(msecs)03d%z')
+            % {"msecs": record.msecs},
+            "funcName": record.funcName,
+            "level": record.levelname,  # "level" auto-parsed by Grafana
+            "levelno": record.levelno,
+            "lineno": record.lineno,
+            "message": msg,
+            "name": record.name,
+            "pathname": record.pathname,
+            "process": record.process,
+            "thread": record.thread,
+        }
+
+        return json.dumps(entry)
+
+
+def is_handleable(message: dict[str, typing.Any],
+                  expire: float,
+                  active_instruments: collections.abc.Collection[str]) -> bool:
+    """Test whether a nextVisit message should be handled by fan-out.
 
     This function emits explanatory logs as a side effect.
 
@@ -170,6 +206,8 @@ def is_handleable(message: dict[str, typing.Any], expire: float) -> bool:
         An unpacked mapping of message fields.
     expire : `float`
         The maximum age, in seconds, that a message can still be handled.
+    active_instruments : collection [`str`]
+        The set of instruments whose messages should be handled.
 
     Returns
     -------
@@ -178,6 +216,9 @@ def is_handleable(message: dict[str, typing.Any], expire: float) -> bool:
     """
     if not message["instrument"]:
         logging.info("Message does not have an instrument. Assuming it's not an observation.")
+        return False
+    if message["instrument"] not in active_instruments:
+        logging.info(f"Instrument {message['instrument']} is not active, ignoring.")
         return False
 
     # efdStamp is visit publication, in seconds since 1970-01-01 UTC
@@ -509,13 +550,17 @@ async def main() -> None:
     security_protocol = os.environ["SECURITY_PROTOCOL"]
 
     # Logging config
+    log_handler = logging.StreamHandler(stream=sys.stdout)
+    log_handler.setFormatter(UsdfJsonFormatter())
     if os.environ.get("DEBUG_LOGS") == "true":
-        logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
+        logging.basicConfig(handlers=[log_handler], level=logging.DEBUG)
     else:
-        logging.basicConfig(stream=sys.stdout, level=logging.INFO)
+        logging.basicConfig(handlers=[log_handler], level=logging.INFO)
 
     conf = yaml.safe_load(Path(instrument_config_file).read_text())
-    instruments = {inst: InstrumentConfig(conf, inst) for inst in supported_instruments}
+    known_instruments = {inst for inst in conf["detectors"].keys() if "-TEST-" not in inst}
+    logging.debug("Known instruments: %s", known_instruments)
+    instruments = {inst: InstrumentConfig(conf, inst) for inst in known_instruments}
     # These groups are for the small datasets used in the upload.py test
     upload_test_detectors = {
         visit: InstrumentConfig.detector_load(conf, f"HSC-TEST-{visit}")
@@ -545,7 +590,7 @@ async def main() -> None:
         ssl_context=ssl_context,
     )
 
-    gauges = {inst: Metrics(inst) for inst in supported_instruments}
+    gauges = {inst: Metrics(inst) for inst in known_instruments}
 
     await consumer.start()
 
@@ -579,7 +624,9 @@ async def main() -> None:
                         )
                         logging.info(f"message offset {msg.offset} and timestamp {msg.timestamp}")
                         logging.info(f"message deserialized {next_visit_message_initial}")
-                        if not is_handleable(next_visit_message_initial["message"], expire):
+                        if not is_handleable(next_visit_message_initial["message"],
+                                             expire,
+                                             supported_instruments):
                             continue
 
                         if platform == "knative":
@@ -601,7 +648,7 @@ async def main() -> None:
                                                                  upload_test_detectors)
                             dispatch_fanned_out_messages_redis_stream(redis_client, tasks, send_info)
                         else:
-                            raise ValueError("no valid platform defined")
+                            raise ValueError(f"no valid platform defined, got '{platform}'")
                     except UnsupportedMessageError:
                         logging.exception("Could not process message, continuing.")
         finally:
