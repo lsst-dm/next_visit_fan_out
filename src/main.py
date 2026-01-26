@@ -567,7 +567,7 @@ async def main() -> None:
         for visit in {59134, 59142, 59150, 59160}
     } | {
         visit: InstrumentConfig.detector_load(conf, f"LSSTCam-TEST-{visit}")
-        for visit in {2025050100367, 2025050100395, 2025050100463, 2025050100499, 2025050100553}
+        for visit in {2026010100039, 2026010100047, 2026010100048, 2026010100050, 2026010100267}
     }
 
     # Start Prometheus endpoint
