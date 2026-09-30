@@ -44,7 +44,7 @@ from redis.exceptions import (ConnectionError, TimeoutError)
 from redis.retry import Retry
 import yaml
 
-from shared.visit import NextVisitModelBase, NextVisitModelKeda, NextVisitModelKnative
+from shared.visit import NextVisitModelBase, NextVisitModelKeda
 
 REQUEST_TIME = Summary("request_processing_seconds", "Time spent processing request")
 
@@ -63,10 +63,7 @@ class InstrumentConfig:
 
     instrument: str
     """The instrument whose metrics are held by this object (`str`)."""
-    url: str
-    """The address of the Knative Serving instance for this instrument
-    (`str`).
-    """
+
     stream: str
     """The name of the redis stream for this instrument (`str`)."""
     detectors: collections.abc.Sequence[int]
@@ -74,7 +71,6 @@ class InstrumentConfig:
 
     def __init__(self, conf, instrument):
         super().__setattr__("instrument", instrument)
-        super().__setattr__("url", conf["knative-urls"][instrument])
         super().__setattr__("stream", conf["redis-streams"][instrument])
         super().__setattr__("detectors", self.detector_load(conf, instrument))
 
@@ -137,12 +133,9 @@ class Metrics:
 
 @dataclasses.dataclass(frozen=True)
 class Submission:
-    """The batched requests to be submitted to a Knative instance.
+    """The batched requests to be submitted.
     """
 
-    url: str
-    """The address of the Knative Serving instance to send requests to (`str`).
-    """
     stream: str
     """The redis stream (`str`)."""
     fan_out_messages: collections.abc.Collection[dict[str, typing.Any]]
@@ -252,9 +245,6 @@ def make_fanned_out_messages(
         A mapping from visit to the supported detectors for that visit.
         This is used by upload.py test where a smaller dataset is uploaded
         for HSC and LSSTCam.
-    gauges : mapping [`str`, `Metrics`], optional
-        A mapping from instrument name to metrics for that instrument.
-        Required for Knative; should be None for KEDA.
 
     Returns
     -------
@@ -266,27 +256,20 @@ def make_fanned_out_messages(
     UnsupportedMessageError
         Raised if ``message`` cannot be fanned-out or sent.
     """
-    def increment_gauge(instrument):
-        # This is only used with the Knative platform.
-        if gauges is not None:
-            gauges[instrument].total_received.inc()
 
     match (message.instrument, message.salIndex):
         case ("HSC", 999):
             # Datasets from using upload_from_repo.py
-            increment_gauge(message.instrument)
             return fan_out(message, instruments[message.instrument])
         case ("HSC" | "LSSTCam", visit) if visit in upload_test_detectors:
             # HSC and LSSTCam have extra active detector
             # configurations just for the upload.py test datasets.
-            increment_gauge(message.instrument)
             return fan_out_upload_test(
                 message,
                 instruments[message.instrument],
                 upload_test_detectors[visit],
             )
         case (instrument, _) if instrument in instruments:
-            increment_gauge(instrument)
             return fan_out(message, instruments[instrument])
         case _:
             raise UnsupportedMessageError(
@@ -330,7 +313,7 @@ def fan_out_upload_test(next_visit, inst_config, detectors):
     fanned_out : `Submission`
         The submission information for the fanned-out messages.
     """
-    return Submission(inst_config.url, inst_config.stream, next_visit.add_detectors(detectors))
+    return Submission(inst_config.stream, next_visit.add_detectors(detectors))
 
 
 def dispatch_fanned_out_messages_redis_stream(redis_client: redis.Redis,
@@ -367,71 +350,6 @@ def dispatch_fanned_out_messages_redis_stream(redis_client: redis.Redis,
     except ValueError:
         logging.exception("Error while sending fanned-out messages.")
 
-
-@REQUEST_TIME.time()
-async def knative_request(
-    in_process_requests_gauge,
-    client: httpx.AsyncClient,
-    knative_serving_url: str,
-    headers: dict[str, str],
-    body: bytes,
-    info: str,
-    *,
-    retry: bool,
-) -> None:
-    """Makes knative http request.
-
-    Parameters
-    ----------
-    in_process_requests_gauge : `prometheus_client.Gauge`
-        A gauge to be updated with the start and end of the request.
-    client : `httpx.AsyncClient`
-        The async httpx client.
-    knative_serving_url : `string`
-        The url for the knative instance.
-    headers : dict[`str,'str']
-        The headers to pass to knative.
-    body : `bytes`
-        The next visit message body.
-    info : `str`
-        Information such as some fields of the next visit message to identify
-        this request and to log with.
-    retry : `bool`
-        Whether or not requests can be retried.
-    """
-    with in_process_requests_gauge.track_inprogress():
-        result = await client.post(
-            knative_serving_url,
-            headers=headers,
-            data=body,  # type:ignore
-            timeout=None,
-        )
-
-        logging.info(
-            f"nextVisit {info} status code {result.status_code} for initial request {result.content}"
-        )
-
-        if retry and result.status_code == 503:
-            if 'Retry-After' in result.headers:
-                delay = int(result.headers['Retry-After'])
-                logging.info("Waiting %d seconds before retrying nextVisit %s...", delay, info)
-                await asyncio.sleep(delay)
-
-            logging.info(
-                f"retry after status code {result.status_code} for nextVisit {info}"
-            )
-            retry_result = await client.post(
-                knative_serving_url,
-                headers=headers,
-                data=body,  # type:ignore
-                timeout=None,
-            )
-            logging.info(
-                f"nextVisit {info} status code {retry_result.status_code} for "
-                f"retried request {retry_result.content}"
-            )
-
-
 async def redis_stream_request(
     redis_client: redis.Redis,
     redis_stream: str,
@@ -467,7 +385,6 @@ async def main() -> None:
     expire = float(os.environ["MESSAGE_EXPIRATION"])
     kafka_schema_registry_url = os.environ["KAFKA_SCHEMA_REGISTRY_URL"]
     max_outgoing = int(os.environ["MAX_FAN_OUT_MESSAGES"])
-    retry_knative = os.environ["RETRY_KNATIVE_REQUESTS"].lower() == "true"
     # Platform that prompt processing will run on
     platform = os.environ["PLATFORM"].lower()
     # Redis Stream cluster
@@ -527,8 +444,6 @@ async def main() -> None:
         sasl_plain_password=sasl_password,
         ssl_context=ssl_context,
     )
-
-    gauges = {inst: Metrics(inst) for inst in known_instruments}
 
     await consumer.start()
 
