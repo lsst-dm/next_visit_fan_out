@@ -33,8 +33,6 @@ import time
 import typing
 
 from aiokafka import AIOKafkaConsumer  # type:ignore
-from cloudevents.conversion import to_structured
-from cloudevents.http import CloudEvent
 import httpx
 from kafkit.registry import Deserializer
 from kafkit.registry.httpx import RegistryApi
@@ -335,66 +333,6 @@ def fan_out_upload_test(next_visit, inst_config, detectors):
     return Submission(inst_config.url, inst_config.stream, next_visit.add_detectors(detectors))
 
 
-def dispatch_fanned_out_messages_knative(client: httpx.AsyncClient,
-                                         topic: str,
-                                         tasks: collections.abc.MutableSet[asyncio.Task],
-                                         send_info: Submission,
-                                         gauges: collections.abc.Mapping[str, Metrics],
-                                         *,
-                                         retry_knative: bool,
-                                         ):
-    """Package and send the fanned-out messages to Knative Prompt Processing.
-
-    Parameters
-    ----------
-    client : `httpx.AsyncClient`
-        The client to which to upload the messages.
-    topic : `str`
-        The topic to which to upload the messages.
-    tasks : set [`asyncio.Task`]
-        Collection for holding the requests.
-    send_info : `Submission`
-        The data and address to submit.
-    gauges : mapping [`str`, `Metrics`]
-        A mapping from instrument name to metrics for that instrument.
-    retry_knative : `bool`
-        Whether or not Knative requests can be retried.
-    """
-    try:
-        attributes = {
-            "type": "com.example.kafka",
-            "source": topic,
-        }
-
-        for fan_out_message in send_info.fan_out_messages:
-            data = fan_out_message
-            data_json = json.dumps(data)
-
-            logging.info(f"data after json dump {data_json}")
-            event = CloudEvent(attributes, data_json)
-            headers, body = to_structured(event)
-            info = {
-                key: data[key] for key in ["instrument", "groupId", "detector"]
-            }
-
-            task = asyncio.create_task(
-                knative_request(
-                    gauges[fan_out_message["instrument"]].in_process,
-                    client,
-                    send_info.url,
-                    headers,
-                    body,
-                    str(info),
-                    retry=retry_knative,
-                )
-            )
-            tasks.add(task)
-            task.add_done_callback(tasks.discard)
-
-    except ValueError:
-        logging.exception("Error while sending fanned-out messages.")
-
-
 def dispatch_fanned_out_messages_redis_stream(redis_client: redis.Redis,
                                               tasks: collections.abc.MutableSet[asyncio.Task],
                                               send_info: Submission,
@@ -629,17 +567,7 @@ async def main() -> None:
                                              supported_instruments):
                             continue
 
-                        if platform == "knative":
-                            next_visit_message_updated = NextVisitModelKnative.from_raw_message(
-                                next_visit_message_initial["message"]
-                            )
-                            send_info = make_fanned_out_messages(next_visit_message_updated,
-                                                                 instruments,
-                                                                 upload_test_detectors,
-                                                                 gauges)
-                            dispatch_fanned_out_messages_knative(client, topic, tasks, send_info, gauges,
-                                                                 retry_knative=retry_knative)
-                        elif platform == "keda":
+                        if platform == "keda":
                             next_visit_message_updated = NextVisitModelKeda.from_raw_message(
                                 next_visit_message_initial["message"]
                             )
