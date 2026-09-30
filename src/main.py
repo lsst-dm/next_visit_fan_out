@@ -36,8 +36,6 @@ from aiokafka import AIOKafkaConsumer  # type:ignore
 import httpx
 from kafkit.registry import Deserializer
 from kafkit.registry.httpx import RegistryApi
-from prometheus_client import start_http_server, Summary  # type:ignore
-from prometheus_client import Gauge
 import redis.asyncio as redis
 from redis.backoff import ExponentialBackoff
 from redis.exceptions import (ConnectionError, TimeoutError)
@@ -45,8 +43,6 @@ from redis.retry import Retry
 import yaml
 
 from shared.visit import NextVisitModelBase, NextVisitModelKeda
-
-REQUEST_TIME = Summary("request_processing_seconds", "Time spent processing request")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -97,38 +93,6 @@ class InstrumentConfig:
             if active:
                 active_detectors.append(int(detector))
         return active_detectors
-
-
-@dataclasses.dataclass(frozen=True)
-class Metrics:
-    """A container for all metrics associated with a specific instrument.
-
-    Parameters
-    ----------
-    instrument : `str`
-        The instrument whose metrics are held by this object.
-    """
-
-    instrument: str
-    """The instrument whose metrics are held by this object (`str`)."""
-    total_received: Gauge
-    """The number of incoming messages processed by this instance
-    (`prometheus_client.Gauge`).
-    """
-    in_process: Gauge
-    """The number of fanned-out messages currently being processed
-    (`prometheus_client.Gauge`).
-    """
-
-    def __init__(self, instrument):
-        super().__setattr__("instrument", instrument)
-        word_instrument = instrument.lower().replace(" ", "_").replace("-", "_")
-        super().__setattr__("total_received",
-                            Gauge(word_instrument + "_next_visit_messages",
-                                  f"next visit messages with {instrument} as instrument"))
-        super().__setattr__("in_process",
-                            Gauge(word_instrument + "_prompt_processing_in_process_requests",
-                                  f"{instrument} in process requests for next visit"))
 
 
 @dataclasses.dataclass(frozen=True)
@@ -231,7 +195,6 @@ def make_fanned_out_messages(
     message: NextVisitModelBase,
     instruments: collections.abc.Mapping[str, InstrumentConfig],
     upload_test_detectors: collections.abc.Mapping[int, collections.abc.Collection[int]],
-    gauges: collections.abc.Mapping[str, Metrics] = None,
 ) -> Submission:
     """Create appropriate fanned-out messages for an incoming message.
 
@@ -424,9 +387,6 @@ async def main() -> None:
         visit: InstrumentConfig.detector_load(conf, f"LSSTCam-TEST-{visit}")
         for visit in {2026010100039, 2026010100047, 2026010100048, 2026010100050, 2026010100267}
     }
-
-    # Start Prometheus endpoint
-    start_http_server(8000)
 
     # Create ssl context for Kafka consumer
     ssl_context = ssl.create_default_context()
