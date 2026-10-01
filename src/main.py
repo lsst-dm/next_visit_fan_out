@@ -33,22 +33,16 @@ import time
 import typing
 
 from aiokafka import AIOKafkaConsumer  # type:ignore
-from cloudevents.conversion import to_structured
-from cloudevents.http import CloudEvent
 import httpx
 from kafkit.registry import Deserializer
 from kafkit.registry.httpx import RegistryApi
-from prometheus_client import start_http_server, Summary  # type:ignore
-from prometheus_client import Gauge
 import redis.asyncio as redis
 from redis.backoff import ExponentialBackoff
 from redis.exceptions import (ConnectionError, TimeoutError)
 from redis.retry import Retry
 import yaml
 
-from shared.visit import NextVisitModelBase, NextVisitModelKeda, NextVisitModelKnative
-
-REQUEST_TIME = Summary("request_processing_seconds", "Time spent processing request")
+from shared.visit import NextVisitModelBase, NextVisitModelKeda
 
 
 @dataclasses.dataclass(frozen=True)
@@ -65,10 +59,7 @@ class InstrumentConfig:
 
     instrument: str
     """The instrument whose metrics are held by this object (`str`)."""
-    url: str
-    """The address of the Knative Serving instance for this instrument
-    (`str`).
-    """
+
     stream: str
     """The name of the redis stream for this instrument (`str`)."""
     detectors: collections.abc.Sequence[int]
@@ -76,7 +67,6 @@ class InstrumentConfig:
 
     def __init__(self, conf, instrument):
         super().__setattr__("instrument", instrument)
-        super().__setattr__("url", conf["knative-urls"][instrument])
         super().__setattr__("stream", conf["redis-streams"][instrument])
         super().__setattr__("detectors", self.detector_load(conf, instrument))
 
@@ -106,45 +96,10 @@ class InstrumentConfig:
 
 
 @dataclasses.dataclass(frozen=True)
-class Metrics:
-    """A container for all metrics associated with a specific instrument.
-
-    Parameters
-    ----------
-    instrument : `str`
-        The instrument whose metrics are held by this object.
-    """
-
-    instrument: str
-    """The instrument whose metrics are held by this object (`str`)."""
-    total_received: Gauge
-    """The number of incoming messages processed by this instance
-    (`prometheus_client.Gauge`).
-    """
-    in_process: Gauge
-    """The number of fanned-out messages currently being processed
-    (`prometheus_client.Gauge`).
-    """
-
-    def __init__(self, instrument):
-        super().__setattr__("instrument", instrument)
-        word_instrument = instrument.lower().replace(" ", "_").replace("-", "_")
-        super().__setattr__("total_received",
-                            Gauge(word_instrument + "_next_visit_messages",
-                                  f"next visit messages with {instrument} as instrument"))
-        super().__setattr__("in_process",
-                            Gauge(word_instrument + "_prompt_processing_in_process_requests",
-                                  f"{instrument} in process requests for next visit"))
-
-
-@dataclasses.dataclass(frozen=True)
 class Submission:
-    """The batched requests to be submitted to a Knative instance.
+    """The batched requests to be submitted.
     """
 
-    url: str
-    """The address of the Knative Serving instance to send requests to (`str`).
-    """
     stream: str
     """The redis stream (`str`)."""
     fan_out_messages: collections.abc.Collection[dict[str, typing.Any]]
@@ -240,7 +195,6 @@ def make_fanned_out_messages(
     message: NextVisitModelBase,
     instruments: collections.abc.Mapping[str, InstrumentConfig],
     upload_test_detectors: collections.abc.Mapping[int, collections.abc.Collection[int]],
-    gauges: collections.abc.Mapping[str, Metrics] = None,
 ) -> Submission:
     """Create appropriate fanned-out messages for an incoming message.
 
@@ -254,9 +208,6 @@ def make_fanned_out_messages(
         A mapping from visit to the supported detectors for that visit.
         This is used by upload.py test where a smaller dataset is uploaded
         for HSC and LSSTCam.
-    gauges : mapping [`str`, `Metrics`], optional
-        A mapping from instrument name to metrics for that instrument.
-        Required for Knative; should be None for KEDA.
 
     Returns
     -------
@@ -268,27 +219,20 @@ def make_fanned_out_messages(
     UnsupportedMessageError
         Raised if ``message`` cannot be fanned-out or sent.
     """
-    def increment_gauge(instrument):
-        # This is only used with the Knative platform.
-        if gauges is not None:
-            gauges[instrument].total_received.inc()
 
     match (message.instrument, message.salIndex):
         case ("HSC", 999):
             # Datasets from using upload_from_repo.py
-            increment_gauge(message.instrument)
             return fan_out(message, instruments[message.instrument])
         case ("HSC" | "LSSTCam", visit) if visit in upload_test_detectors:
             # HSC and LSSTCam have extra active detector
             # configurations just for the upload.py test datasets.
-            increment_gauge(message.instrument)
             return fan_out_upload_test(
                 message,
                 instruments[message.instrument],
                 upload_test_detectors[visit],
             )
         case (instrument, _) if instrument in instruments:
-            increment_gauge(instrument)
             return fan_out(message, instruments[instrument])
         case _:
             raise UnsupportedMessageError(
@@ -332,67 +276,7 @@ def fan_out_upload_test(next_visit, inst_config, detectors):
     fanned_out : `Submission`
         The submission information for the fanned-out messages.
     """
-    return Submission(inst_config.url, inst_config.stream, next_visit.add_detectors(detectors))
-
-
-def dispatch_fanned_out_messages_knative(client: httpx.AsyncClient,
-                                         topic: str,
-                                         tasks: collections.abc.MutableSet[asyncio.Task],
-                                         send_info: Submission,
-                                         gauges: collections.abc.Mapping[str, Metrics],
-                                         *,
-                                         retry_knative: bool,
-                                         ):
-    """Package and send the fanned-out messages to Knative Prompt Processing.
-
-    Parameters
-    ----------
-    client : `httpx.AsyncClient`
-        The client to which to upload the messages.
-    topic : `str`
-        The topic to which to upload the messages.
-    tasks : set [`asyncio.Task`]
-        Collection for holding the requests.
-    send_info : `Submission`
-        The data and address to submit.
-    gauges : mapping [`str`, `Metrics`]
-        A mapping from instrument name to metrics for that instrument.
-    retry_knative : `bool`
-        Whether or not Knative requests can be retried.
-    """
-    try:
-        attributes = {
-            "type": "com.example.kafka",
-            "source": topic,
-        }
-
-        for fan_out_message in send_info.fan_out_messages:
-            data = fan_out_message
-            data_json = json.dumps(data)
-
-            logging.info(f"data after json dump {data_json}")
-            event = CloudEvent(attributes, data_json)
-            headers, body = to_structured(event)
-            info = {
-                key: data[key] for key in ["instrument", "groupId", "detector"]
-            }
-
-            task = asyncio.create_task(
-                knative_request(
-                    gauges[fan_out_message["instrument"]].in_process,
-                    client,
-                    send_info.url,
-                    headers,
-                    body,
-                    str(info),
-                    retry=retry_knative,
-                )
-            )
-            tasks.add(task)
-            task.add_done_callback(tasks.discard)
-
-    except ValueError:
-        logging.exception("Error while sending fanned-out messages.")
+    return Submission(inst_config.stream, next_visit.add_detectors(detectors))
 
 
 def dispatch_fanned_out_messages_redis_stream(redis_client: redis.Redis,
@@ -429,71 +313,6 @@ def dispatch_fanned_out_messages_redis_stream(redis_client: redis.Redis,
     except ValueError:
         logging.exception("Error while sending fanned-out messages.")
 
-
-@REQUEST_TIME.time()
-async def knative_request(
-    in_process_requests_gauge,
-    client: httpx.AsyncClient,
-    knative_serving_url: str,
-    headers: dict[str, str],
-    body: bytes,
-    info: str,
-    *,
-    retry: bool,
-) -> None:
-    """Makes knative http request.
-
-    Parameters
-    ----------
-    in_process_requests_gauge : `prometheus_client.Gauge`
-        A gauge to be updated with the start and end of the request.
-    client : `httpx.AsyncClient`
-        The async httpx client.
-    knative_serving_url : `string`
-        The url for the knative instance.
-    headers : dict[`str,'str']
-        The headers to pass to knative.
-    body : `bytes`
-        The next visit message body.
-    info : `str`
-        Information such as some fields of the next visit message to identify
-        this request and to log with.
-    retry : `bool`
-        Whether or not requests can be retried.
-    """
-    with in_process_requests_gauge.track_inprogress():
-        result = await client.post(
-            knative_serving_url,
-            headers=headers,
-            data=body,  # type:ignore
-            timeout=None,
-        )
-
-        logging.info(
-            f"nextVisit {info} status code {result.status_code} for initial request {result.content}"
-        )
-
-        if retry and result.status_code == 503:
-            if 'Retry-After' in result.headers:
-                delay = int(result.headers['Retry-After'])
-                logging.info("Waiting %d seconds before retrying nextVisit %s...", delay, info)
-                await asyncio.sleep(delay)
-
-            logging.info(
-                f"retry after status code {result.status_code} for nextVisit {info}"
-            )
-            retry_result = await client.post(
-                knative_serving_url,
-                headers=headers,
-                data=body,  # type:ignore
-                timeout=None,
-            )
-            logging.info(
-                f"nextVisit {info} status code {retry_result.status_code} for "
-                f"retried request {retry_result.content}"
-            )
-
-
 async def redis_stream_request(
     redis_client: redis.Redis,
     redis_stream: str,
@@ -529,7 +348,6 @@ async def main() -> None:
     expire = float(os.environ["MESSAGE_EXPIRATION"])
     kafka_schema_registry_url = os.environ["KAFKA_SCHEMA_REGISTRY_URL"]
     max_outgoing = int(os.environ["MAX_FAN_OUT_MESSAGES"])
-    retry_knative = os.environ["RETRY_KNATIVE_REQUESTS"].lower() == "true"
     # Platform that prompt processing will run on
     platform = os.environ["PLATFORM"].lower()
     # Redis Stream cluster
@@ -570,9 +388,6 @@ async def main() -> None:
         for visit in {2026010100039, 2026010100047, 2026010100048, 2026010100050, 2026010100267}
     }
 
-    # Start Prometheus endpoint
-    start_http_server(8000)
-
     # Create ssl context for Kafka consumer
     ssl_context = ssl.create_default_context()
     ssl_context.check_hostname = False  # TODO set to true when migrated to prompt-kafka
@@ -589,8 +404,6 @@ async def main() -> None:
         sasl_plain_password=sasl_password,
         ssl_context=ssl_context,
     )
-
-    gauges = {inst: Metrics(inst) for inst in known_instruments}
 
     await consumer.start()
 
@@ -629,17 +442,7 @@ async def main() -> None:
                                              supported_instruments):
                             continue
 
-                        if platform == "knative":
-                            next_visit_message_updated = NextVisitModelKnative.from_raw_message(
-                                next_visit_message_initial["message"]
-                            )
-                            send_info = make_fanned_out_messages(next_visit_message_updated,
-                                                                 instruments,
-                                                                 upload_test_detectors,
-                                                                 gauges)
-                            dispatch_fanned_out_messages_knative(client, topic, tasks, send_info, gauges,
-                                                                 retry_knative=retry_knative)
-                        elif platform == "keda":
+                        if platform == "keda":
                             next_visit_message_updated = NextVisitModelKeda.from_raw_message(
                                 next_visit_message_initial["message"]
                             )

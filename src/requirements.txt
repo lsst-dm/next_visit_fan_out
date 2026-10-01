@@ -1,5 +1,4 @@
 requests
-cloudevents
 asyncio
 aiohttp
 httpx
@@ -8,5 +7,4 @@ dataclasses-avroschema
 PyYAML==6.0
 kafkit[httpx]
 kafkit
-prometheus-client
 redis
