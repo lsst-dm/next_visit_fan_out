@@ -58,8 +58,7 @@ class InstrumentConfig:
     """
 
     instrument: str
-    """The instrument whose metrics are held by this object (`str`)."""
-
+    """The instrument being configured."""
     stream: str
     """The name of the redis stream for this instrument (`str`)."""
     detectors: collections.abc.Sequence[int]
@@ -103,7 +102,7 @@ class Submission:
     stream: str
     """The redis stream (`str`)."""
     fan_out_messages: collections.abc.Collection[dict[str, typing.Any]]
-    """The messages to send to ``url`` (collection [`dict`])."""
+    """The messages to send (collection [`dict`])."""
 
 
 class UnsupportedMessageError(RuntimeError):
