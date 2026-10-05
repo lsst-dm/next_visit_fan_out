@@ -58,8 +58,7 @@ class InstrumentConfig:
     """
 
     instrument: str
-    """The instrument whose metrics are held by this object (`str`)."""
-
+    """The instrument being configured."""
     stream: str
     """The name of the redis stream for this instrument (`str`)."""
     detectors: collections.abc.Sequence[int]
@@ -103,7 +102,7 @@ class Submission:
     stream: str
     """The redis stream (`str`)."""
     fan_out_messages: collections.abc.Collection[dict[str, typing.Any]]
-    """The messages to send to ``url`` (collection [`dict`])."""
+    """The messages to send (collection [`dict`])."""
 
 
 class UnsupportedMessageError(RuntimeError):
@@ -256,7 +255,7 @@ def fan_out(next_visit, inst_config):
     fanned_out : `Submission`
         The submission information for the fanned-out messages.
     """
-    return Submission(inst_config.url, inst_config.stream, next_visit.add_detectors(inst_config.detectors))
+    return Submission(inst_config.stream, next_visit.add_detectors(inst_config.detectors))
 
 
 def fan_out_upload_test(next_visit, inst_config, detectors):
