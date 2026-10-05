@@ -256,7 +256,7 @@ def fan_out(next_visit, inst_config):
     fanned_out : `Submission`
         The submission information for the fanned-out messages.
     """
-    return Submission(inst_config.url, inst_config.stream, next_visit.add_detectors(inst_config.detectors))
+    return Submission(inst_config.stream, next_visit.add_detectors(inst_config.detectors))
 
 
 def fan_out_upload_test(next_visit, inst_config, detectors):
