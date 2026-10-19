@@ -351,6 +351,10 @@ async def main() -> None:
     platform = os.environ["PLATFORM"].lower()
     # Redis Stream cluster
     redis_host = os.environ["REDIS_HOST"]
+    # Redis connect timeout
+    redis_connect_timeout = float(os.environ.get("REDIS_CONNECT_TIMEOUT", 5))
+    # Redis socket timeout
+    redis_socket_timeout = float(os.environ.get("REDIS_SOCKET_TIMEOUT", 5))
     # Maximum delay time for Redis retries in seconds
     redis_retry_delay_cap = int(os.environ.get("REDIS_RETRY_DELAY_CAP", 5))
     # Initial delay for first Redis retry in seconds
@@ -421,6 +425,8 @@ async def main() -> None:
             # Redis client setup with retry and exponential backoff
             # https://redis.io/kb/doc/22wxq63j93/how-to-manage-client-reconnections-in-case-of-errors-with-redis-py
             redis_client = redis.Redis(host=redis_host,
+                                       socket_connect_timeout=redis_connect_timeout,
+                                       socket_timeout=redis_socket_timeout,
                                        retry=Retry(ExponentialBackoff(cap=redis_retry_delay_cap,
                                                                       base=redis_retry_initial_delay),
                                                    redis_retry_count),
