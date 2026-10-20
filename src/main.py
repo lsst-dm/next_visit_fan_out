@@ -424,6 +424,8 @@ async def main() -> None:
 
     tasks = set()
 
+    redis_client = None
+
     # Bound the number of concurrent operations
     redis_semaphore = asyncio.Semaphore(redis_max_concurrency)
 
@@ -443,12 +445,12 @@ async def main() -> None:
                                        max_connections=redis_max_connections, 
                                        socket_connect_timeout=redis_connect_timeout,
                                        socket_timeout=redis_socket_timeout,
+                                       health_check_interval=redis_health_check_interval,
                                        retry=Retry(ExponentialBackoff(cap=redis_retry_delay_cap,
                                                                       base=redis_retry_initial_delay),
                                                    redis_retry_count),
                                        retry_on_error=[ConnectionError, TimeoutError, ConnectionResetError],
-                                       health_check_interval=redis_health_check_interval)
-            await redis_client.aclose()
+                                       )
 
             while True:  # run continously
                 async for msg in consumer:
@@ -478,8 +480,13 @@ async def main() -> None:
                             raise ValueError(f"no valid platform defined, got '{platform}'")
                     except UnsupportedMessageError:
                         logging.exception("Could not process message, continuing.")
+
         finally:
             await consumer.stop()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            if redis_client is not None:
+                await redis_client.aclose()
 
 
 asyncio.run(main())
