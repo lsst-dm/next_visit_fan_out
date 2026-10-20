@@ -279,6 +279,7 @@ def fan_out_upload_test(next_visit, inst_config, detectors):
 
 
 def dispatch_fanned_out_messages_redis_stream(redis_client: redis.Redis,
+                                              redis_semaphore: asyncio.Semaphore,
                                               tasks: collections.abc.MutableSet[asyncio.Task],
                                               send_info: Submission,
                                               ):
@@ -288,6 +289,8 @@ def dispatch_fanned_out_messages_redis_stream(redis_client: redis.Redis,
     ----------
     redis_client : `redis.Redis`
         The redis client used to send the redis stream.
+    redis_semaphore : `asyncio.Semaphore`
+        Limits the number of concurrent xadd operations.
     tasks : set [`asyncio.Task`]
         Collection for holding the requests.
     send_info : `Submission`
@@ -303,6 +306,7 @@ def dispatch_fanned_out_messages_redis_stream(redis_client: redis.Redis,
                 redis_stream_request(
                     redis_client,
                     stream,
+                    redis_semaphore,
                     fan_out_message,
                 )
             )
@@ -315,6 +319,7 @@ def dispatch_fanned_out_messages_redis_stream(redis_client: redis.Redis,
 async def redis_stream_request(
     redis_client: redis.Redis,
     redis_stream: str,
+    redis_semaphore: asyncio.Semaphore,
     body: dict[str, typing.Any],
 ) -> None:
     """Makes redis stream request.
@@ -323,16 +328,19 @@ async def redis_stream_request(
     ----------
     redis_client : `redis.Redis`
         The redis stream client.
+    redis_semaphore : `asyncio.Semaphore`
+        Limits the number of concurrent xadd operations.
     redis_stream : `str`
         The name of the redis stream.
     body : `dict` [`str`, `typing.Any`]
         The next visit message body.
     """
 
-    redis_entry_id = await redis_client.xadd(
-        redis_stream,
-        body
-    )
+    async with redis_semaphore:
+        redis_entry_id = await redis_client.xadd(
+            redis_stream,
+            body
+        )
     logging.info(f"Sent msg {body} for redis stream {redis_stream} with id {redis_entry_id}")
 
 
@@ -355,6 +363,10 @@ async def main() -> None:
     redis_connect_timeout = float(os.environ.get("REDIS_CONNECT_TIMEOUT", 5))
     # Redis socket timeout
     redis_socket_timeout = float(os.environ.get("REDIS_SOCKET_TIMEOUT", 5))
+    # Maximum number of concurrent xadd operations (CHANGE 2: new config)
+    redis_max_concurrency = int(os.environ.get("REDIS_MAX_CONCURRENCY", 450))
+    # Redis pool size; keep >= REDIS_MAX_CONCURRENCY with headroom
+    redis_max_connections = int(os.environ.get("REDIS_MAX_CONNECTIONS", 500))
     # Maximum delay time for Redis retries in seconds
     redis_retry_delay_cap = int(os.environ.get("REDIS_RETRY_DELAY_CAP", 5))
     # Initial delay for first Redis retry in seconds
@@ -412,6 +424,9 @@ async def main() -> None:
 
     tasks = set()
 
+    # Bound the number of concurrent operations
+    redis_semaphore = asyncio.Semaphore(redis_max_concurrency)
+
     limits = httpx.Limits(max_connections=max_outgoing)
     async with httpx.AsyncClient(limits=limits) as client:
 
@@ -425,6 +440,7 @@ async def main() -> None:
             # Redis client setup with retry and exponential backoff
             # https://redis.io/kb/doc/22wxq63j93/how-to-manage-client-reconnections-in-case-of-errors-with-redis-py
             redis_client = redis.Redis(host=redis_host,
+                                       max_connections=redis_max_connections, 
                                        socket_connect_timeout=redis_connect_timeout,
                                        socket_timeout=redis_socket_timeout,
                                        retry=Retry(ExponentialBackoff(cap=redis_retry_delay_cap,
@@ -454,7 +470,10 @@ async def main() -> None:
                             send_info = make_fanned_out_messages(next_visit_message_updated,
                                                                  instruments,
                                                                  upload_test_detectors)
-                            dispatch_fanned_out_messages_redis_stream(redis_client, tasks, send_info)
+                            dispatch_fanned_out_messages_redis_stream(redis_client,
+                                                                      redis_semaphore,
+                                                                      tasks,
+                                                                      send_info)
                         else:
                             raise ValueError(f"no valid platform defined, got '{platform}'")
                     except UnsupportedMessageError:
