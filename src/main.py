@@ -293,9 +293,6 @@ async def redis_stream_request(
     disabled. Messages are all pipelined in a transaction along with a nonce
     to avoid resubmission of a visit on certain errors.
 
-    Exceptions are handled here rather than being allowed to escape the task,
-    which would otherwise surface as "Task exception was never retrieved".
-
     Parameters
     ----------
     redis_client : `redis.Redis`
@@ -320,29 +317,29 @@ async def redis_stream_request(
                     try:
                         await pipe.watch(marker)
                         if await pipe.exists(marker):
-                            logging.info("Already sent %s", marker)
+                            logging.info("Visit already sent [%s]", marker)
                             return
                         pipe.multi()
                         pipe.set(marker, 1, ex=360)
                         for body in send_info.fan_out_messages:
                             pipe.xadd(send_info.stream, body)
                         await pipe.execute()
-                        logging.info("Sent %d messages for redis stream %s",
+                        logging.info("Sent %d messages for [%s]",
                                      len(send_info.fan_out_messages),
-                                     send_info.stream)
+                                     marker)
                         return
                     except WatchError:
+                        logging.warning("Redis WATCH failed while sending [%s], checking again",
+                                        marker)
                         continue
         except (ConnectionError, TimeoutError) as e:
             if attempt >= max_attempts:
-                # Exhausted application-level retries. The message is dropped.
-                # If stronger delivery is required, push to a dead-letter
-                # store here for later replay instead of logging and returning.
                 logging.error(
-                    "Dropping visit [%s] after %d attempts: %s",
+                    "Giving up on [%s] after %d attempts: %s",
                     marker, attempt, e,
                 )
-                return
+                # Let main loop figure it out.
+                raise
             delay = min(max_delay, base_delay * (2 ** (attempt - 1)))
             logging.warning(
                 "batch xadd for visit [%s] failed (attempt %d/%d), retrying in "
@@ -354,7 +351,7 @@ async def redis_stream_request(
             # Unexpected error: log with traceback and stop retrying so we do
             # not loop forever on a non-transient problem.
             logging.exception(
-                "Unexpected error sending msg to redis stream %s", send_info.stream
+                "Unexpected error, dropping visit [%s]", marker
             )
             return
 
@@ -402,6 +399,11 @@ async def main() -> None:
     else:
         logging.basicConfig(handlers=[log_handler], level=logging.INFO)
 
+    # Note: if we start supporting multiple platforms again, filter here so
+    # the loop doesn't have to raise an error.
+    if platform != "keda":
+        raise ValueError(f"no valid platform defined, got '{platform}'")
+
     conf = yaml.safe_load(Path(instrument_config_file).read_text())
     known_instruments = {inst for inst in conf["detectors"].keys() if "-TEST-" not in inst}
     logging.debug("Known instruments: %s", known_instruments)
@@ -430,11 +432,10 @@ async def main() -> None:
         sasl_plain_username=sasl_username,
         sasl_plain_password=sasl_password,
         ssl_context=ssl_context,
+        enable_auto_commit=False,
     )
 
     await consumer.start()
-
-    tasks = set()
 
     # Define before the try so cleanup in the finally block is always safe.
     redis_client = None
@@ -471,42 +472,38 @@ async def main() -> None:
                         next_visit_message_initial = await deserializer.deserialize(
                             data=msg.value
                         )
-                        logging.info(f"message offset {msg.offset} and timestamp {msg.timestamp}")
-                        logging.info(f"message deserialized {next_visit_message_initial}")
+                        logging.info(f"message deserialized: offset[{msg.offset}] "
+                                     f"timestamp[{msg.timestamp}] {next_visit_message_initial}")
                         if not is_handleable(next_visit_message_initial["message"],
                                              expire,
                                              supported_instruments):
                             continue
 
-                        if platform == "keda":
-                            next_visit_message_updated = NextVisitModelKeda.from_raw_message(
-                                next_visit_message_initial["message"]
-                            )
-                            send_info = make_fanned_out_messages(next_visit_message_updated,
-                                                                 instruments,
-                                                                 upload_test_detectors)
-                            marker = f"{send_info.stream}:sent:{msg.topic}:{msg.partition}:{msg.offset}"
-                            task = asyncio.create_task(redis_stream_request(redis_client,
-                                                                            send_info,
-                                                                            marker,
-                                                                            redis_send_attempts,
-                                                                            redis_send_base_delay,
-                                                                            redis_send_max_delay))
-                            tasks.add(task)
-                            task.add_done_callback(tasks.discard)
-                        else:
-                            raise ValueError(f"no valid platform defined, got '{platform}'")
-                    except UnsupportedMessageError:
-                        logging.exception("Could not process message, continuing.")
+                        next_visit_message_updated = NextVisitModelKeda.from_raw_message(
+                            next_visit_message_initial["message"]
+                        )
+                        send_info = make_fanned_out_messages(next_visit_message_updated,
+                                                             instruments,
+                                                             upload_test_detectors)
+                        marker = f"{send_info.stream}:sent:{msg.topic}:{msg.partition}:{msg.offset}"
+                        await redis_stream_request(redis_client, send_info,
+                                                   marker, redis_send_attempts,
+                                                   redis_send_base_delay,
+                                                   redis_send_max_delay)
+                    except (ConnectionError, TimeoutError):
+                        logging.exception("Could not submit visit to Redis, skipping.")
+                    except Exception:
+                        # TODO: Find more exceptions which we can handle as
+                        # temporary. Schema registry outage? What actually
+                        # breaks temporarily, and not for very long?
+                        logging.exception("Could not process message, skipping.")
+                    # Commit here and not in a finally so deliberately
+                    # stopping the process does not commit unsent visits.
+                    await consumer.commit()
 
         finally:
             # Stop consuming new Kafka messages first.
             await consumer.stop()
-            # Drain any in-flight xadd tasks before closing the client, so we
-            # don't tear the pool out from under background sends. Exceptions
-            # from those tasks are collected (not raised) here.
-            if tasks:
-                await asyncio.gather(*tasks, return_exceptions=True)
             # Close the Redis client once, on shutdown (not after construction)
             if redis_client is not None:
                 await redis_client.aclose()
