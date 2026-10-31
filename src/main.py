@@ -39,7 +39,7 @@ from kafkit.registry.httpx import RegistryApi
 import redis.asyncio as redis
 from redis.backoff import ExponentialBackoff
 from redis.exceptions import (ConnectionError, TimeoutError)
-from redis.retry import Retry
+from redis.asyncio.retry import Retry
 import yaml
 
 from shared.visit import NextVisitModelBase, NextVisitModelKeda
