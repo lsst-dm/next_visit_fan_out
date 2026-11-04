@@ -37,25 +37,12 @@ import httpx
 from kafkit.registry import Deserializer
 from kafkit.registry.httpx import RegistryApi
 import redis.asyncio as redis
-from redis.backoff import ExponentialBackoff
-from redis.exceptions import (ConnectionError, TimeoutError)
-from redis.retry import Retry
+from redis.backoff import NoBackoff
+from redis.exceptions import (ConnectionError, TimeoutError, WatchError)
+from redis.asyncio.retry import Retry
 import yaml
 
 from shared.visit import NextVisitModelBase, NextVisitModelKeda
-
-
-class LoggingBackoff(ExponentialBackoff):
-    """ExponentialBackoff that logs each redis-py connection-level retry.
-
-    Used to verify that redis-py is actually re-attempting commands during
-    connection failures (e.g. a Redis restart).
-    """
-    def compute(self, failures):
-        delay = super().compute(failures)
-        logging.warning("redis-py connection retry: attempt #%s, backoff %.3fs",
-                        failures, delay)
-        return delay
 
 
 @dataclasses.dataclass(frozen=True)
@@ -291,90 +278,29 @@ def fan_out_upload_test(next_visit, inst_config, detectors):
     return Submission(inst_config.stream, next_visit.add_detectors(detectors))
 
 
-def dispatch_fanned_out_messages_redis_stream(redis_client: redis.Redis,
-                                              redis_semaphore: asyncio.Semaphore,
-                                              tasks: collections.abc.MutableSet[asyncio.Task],
-                                              send_info: Submission,
-                                              redis_send_attempts: int,
-                                              redis_send_base_delay: float,
-                                              redis_send_max_delay: float,
-                                              ):
-    """Package and send the fanned-out messages to Prompt Processing.
-
-    Parameters
-    ----------
-    redis_client : `redis.Redis`
-        The redis client used to send the redis stream.
-    redis_semaphore : `asyncio.Semaphore`
-        Limits the number of concurrent xadd operations.
-    tasks : set [`asyncio.Task`]
-        Collection for holding the requests.
-    send_info : `Submission`
-        The data and address to submit.
-    redis_send_attempts : `int`
-        Maximum application-level send attempts per message.
-    redis_send_base_delay : `float`
-        Initial backoff delay (seconds) between application-level retries.
-    redis_send_max_delay : `float`
-        Maximum backoff delay (seconds) between application-level retries.
-    """
-
-    stream = send_info.stream
-
-    try:
-        for fan_out_message in send_info.fan_out_messages:
-
-            task = asyncio.create_task(
-                redis_stream_request(
-                    redis_client,
-                    redis_semaphore,
-                    stream,
-                    fan_out_message,
-                    redis_send_attempts,
-                    redis_send_base_delay,
-                    redis_send_max_delay,
-                )
-            )
-            tasks.add(task)
-            task.add_done_callback(tasks.discard)
-
-    except ValueError:
-        logging.exception("Error while sending fanned-out messages.")
-
-
 async def redis_stream_request(
     redis_client: redis.Redis,
-    redis_semaphore: asyncio.Semaphore,
-    redis_stream: str,
-    body: dict[str, typing.Any],
+    send_info: Submission,
+    marker: str,
     max_attempts: int,
     base_delay: float,
     max_delay: float,
 ) -> None:
     """Makes a redis stream request, re-driving across transient failures.
 
-    Each message is sent with an application-level bounded retry loop so that
-    a brief Redis outage (e.g. a restart) does not drop the message. This sits
-    on top of redis-py's connection-level ``Retry``; the connection retry
-    alone does not reliably resend ``xadd`` across a full restart.
-
-    The ``asyncio.Semaphore`` bounds the number of concurrent ``xadd``
-    operations so a backlog (overlapping/bursting visits) cannot launch
-    unbounded sends and drain the connection pool.
-
-    Exceptions are handled here rather than being allowed to escape the task,
-    which would otherwise surface as "Task exception was never retrieved".
+    Each visit is sent with an application-level bounded retry loop so that
+    a brief Redis outage (e.g. a restart) does not drop it. Redis retry is
+    disabled. Messages are all pipelined in a transaction along with a nonce
+    to avoid resubmission of a visit on certain errors.
 
     Parameters
     ----------
     redis_client : `redis.Redis`
         The redis stream client.
-    redis_semaphore : `asyncio.Semaphore`
-        Limits the number of concurrent xadd operations.
-    redis_stream : `str`
-        The name of the redis stream.
-    body : `dict` [`str`, `typing.Any`]
-        The next visit message body.
+    send_info : `Submission`
+        The data and address to submit.
+    marker : `str`
+        A nonce to avoid resubmitting a visit after a network fault.
     max_attempts : `int`
         Maximum number of application-level send attempts.
     base_delay : `float`
@@ -386,35 +312,46 @@ async def redis_stream_request(
     while True:
         attempt += 1
         try:
-            async with redis_semaphore:
-                redis_entry_id = await redis_client.xadd(redis_stream, body)
-            logging.info(
-                "Sent msg %s for redis stream %s with id %s (attempt %d)",
-                body, redis_stream, redis_entry_id, attempt,
-            )
-            return
+            async with redis_client.pipeline() as pipe:
+                while True:
+                    try:
+                        await pipe.watch(marker)
+                        if await pipe.exists(marker):
+                            logging.info("Visit already sent [%s]", marker)
+                            return
+                        pipe.multi()
+                        pipe.set(marker, 1, ex=360)
+                        for body in send_info.fan_out_messages:
+                            pipe.xadd(send_info.stream, body)
+                        await pipe.execute()
+                        logging.info("Sent %d messages for [%s]",
+                                     len(send_info.fan_out_messages),
+                                     marker)
+                        return
+                    except WatchError:
+                        logging.warning("Redis WATCH failed while sending [%s], checking again",
+                                        marker)
+                        continue
         except (ConnectionError, TimeoutError) as e:
             if attempt >= max_attempts:
-                # Exhausted application-level retries. The message is dropped.
-                # If stronger delivery is required, push to a dead-letter
-                # store here for later replay instead of logging and returning.
                 logging.error(
-                    "Dropping msg for redis stream %s after %d attempts: %s",
-                    redis_stream, attempt, e,
+                    "Giving up on [%s] after %d attempts: %s",
+                    marker, attempt, e,
                 )
-                return
+                # Let main loop figure it out.
+                raise
             delay = min(max_delay, base_delay * (2 ** (attempt - 1)))
             logging.warning(
-                "xadd to redis stream %s failed (attempt %d/%d), retrying in "
+                "batch xadd for visit [%s] failed (attempt %d/%d), retrying in "
                 "%.1fs: %s",
-                redis_stream, attempt, max_attempts, delay, e,
+                marker, attempt, max_attempts, delay, e,
             )
             await asyncio.sleep(delay)
         except Exception:
             # Unexpected error: log with traceback and stop retrying so we do
             # not loop forever on a non-transient problem.
             logging.exception(
-                "Unexpected error sending msg to redis stream %s", redis_stream
+                "Unexpected error, dropping visit [%s]", marker
             )
             return
 
@@ -434,23 +371,15 @@ async def main() -> None:
     platform = os.environ["PLATFORM"].lower()
     # Redis Stream cluster
     redis_host = os.environ["REDIS_HOST"]
-    # Maximum delay time for Redis retries in seconds
-    redis_retry_delay_cap = int(os.environ.get("REDIS_RETRY_DELAY_CAP", 5))
-    # Initial delay for first Redis retry in seconds
-    redis_retry_initial_delay = int(os.environ.get("REDIS_RETRY_INITIAL_DELAY", 1))
-    # Redis max retry count (connection-level, within a single xadd call)
-    redis_retry_count = int(os.environ.get("REDIS_RETRY_COUNT", 3))
     # Redis health check interval
     redis_health_check_interval = int(os.environ.get("REDIS_HEALTH_CHECK_INTERVAL", 3))
     # Redis socket timeouts (seconds) so sends/retries fail fast on a dead or
     # slow network and release their connections instead of hanging.
     redis_connect_timeout = float(os.environ.get("REDIS_CONNECT_TIMEOUT", 5))
     redis_socket_timeout = float(os.environ.get("REDIS_SOCKET_TIMEOUT", 5))
-    # Redis connection pool size. Must be >= REDIS_MAX_CONCURRENCY with
-    # headroom so concurrent sends never starve for a connection.
-    redis_max_connections = int(os.environ.get("REDIS_MAX_CONNECTIONS", 500))
-    # Maximum concurrent xadd operations (semaphore throttle).
-    redis_max_concurrency = int(os.environ.get("REDIS_MAX_CONCURRENCY", 450))
+    # Redis connection pool size. Leave substantial headroom (~ 100) as it is
+    # harmless. Normal operation uses just one or two connections.
+    redis_max_connections = int(os.environ.get("REDIS_MAX_CONNECTIONS", 100))
     # Application-level re-drive parameters (span a Redis restart window).
     redis_send_attempts = int(os.environ.get("REDIS_SEND_ATTEMPTS", 5))
     redis_send_base_delay = float(os.environ.get("REDIS_SEND_BASE_DELAY", 1))
@@ -469,6 +398,11 @@ async def main() -> None:
         logging.basicConfig(handlers=[log_handler], level=logging.DEBUG)
     else:
         logging.basicConfig(handlers=[log_handler], level=logging.INFO)
+
+    # Note: if we start supporting multiple platforms again, filter here so
+    # the loop doesn't have to raise an error.
+    if platform != "keda":
+        raise ValueError(f"no valid platform defined, got '{platform}'")
 
     conf = yaml.safe_load(Path(instrument_config_file).read_text())
     known_instruments = {inst for inst in conf["detectors"].keys() if "-TEST-" not in inst}
@@ -498,14 +432,10 @@ async def main() -> None:
         sasl_plain_username=sasl_username,
         sasl_plain_password=sasl_password,
         ssl_context=ssl_context,
+        enable_auto_commit=False,
     )
 
     await consumer.start()
-
-    tasks = set()
-
-    # Bound the number of concurrent xadd operations.
-    redis_semaphore = asyncio.Semaphore(redis_max_concurrency)
 
     # Define before the try so cleanup in the finally block is always safe.
     redis_client = None
@@ -533,10 +463,7 @@ async def main() -> None:
                 socket_connect_timeout=redis_connect_timeout,
                 socket_timeout=redis_socket_timeout,
                 health_check_interval=redis_health_check_interval,
-                retry=Retry(LoggingBackoff(cap=redis_retry_delay_cap,
-                                           base=redis_retry_initial_delay),
-                            redis_retry_count),
-                retry_on_error=[ConnectionError, TimeoutError, ConnectionResetError],
+                retry=Retry(NoBackoff(), 0),
             )
 
             while True:  # run continously
@@ -545,43 +472,39 @@ async def main() -> None:
                         next_visit_message_initial = await deserializer.deserialize(
                             data=msg.value
                         )
-                        logging.info(f"message offset {msg.offset} and timestamp {msg.timestamp}")
-                        logging.info(f"message deserialized {next_visit_message_initial}")
+                        logging.info(f"message deserialized: offset[{msg.offset}] "
+                                     f"timestamp[{msg.timestamp}] {next_visit_message_initial}")
                         if not is_handleable(next_visit_message_initial["message"],
                                              expire,
                                              supported_instruments):
                             continue
 
-                        if platform == "keda":
-                            next_visit_message_updated = NextVisitModelKeda.from_raw_message(
-                                next_visit_message_initial["message"]
-                            )
-                            send_info = make_fanned_out_messages(next_visit_message_updated,
-                                                                 instruments,
-                                                                 upload_test_detectors)
-                            dispatch_fanned_out_messages_redis_stream(
-                                redis_client,
-                                redis_semaphore,
-                                tasks,
-                                send_info,
-                                redis_send_attempts,
-                                redis_send_base_delay,
-                                redis_send_max_delay,
-                            )
-                        else:
-                            raise ValueError(f"no valid platform defined, got '{platform}'")
-                    except UnsupportedMessageError:
-                        logging.exception("Could not process message, continuing.")
+                        next_visit_message_updated = NextVisitModelKeda.from_raw_message(
+                            next_visit_message_initial["message"]
+                        )
+                        send_info = make_fanned_out_messages(next_visit_message_updated,
+                                                             instruments,
+                                                             upload_test_detectors)
+                        marker = f"{send_info.stream}:sent:{msg.topic}:{msg.partition}:{msg.offset}"
+                        await redis_stream_request(redis_client, send_info,
+                                                   marker, redis_send_attempts,
+                                                   redis_send_base_delay,
+                                                   redis_send_max_delay)
+                    except (ConnectionError, TimeoutError):
+                        logging.exception("Could not submit visit to Redis, skipping.")
+                    except Exception:
+                        # TODO: Find more exceptions which we can handle as
+                        # temporary. Schema registry outage? What actually
+                        # breaks temporarily, and not for very long?
+                        logging.exception("Could not process message, skipping.")
+                    # Commit here and not in a finally so deliberately
+                    # stopping the process does not commit unsent visits.
+                    await consumer.commit()
 
         finally:
             # Stop consuming new Kafka messages first.
             await consumer.stop()
-            # Drain any in-flight xadd tasks before closing the client, so we
-            # don't tear the pool out from under background sends. Exceptions
-            # from those tasks are collected (not raised) here.
-            if tasks:
-                await asyncio.gather(*tasks, return_exceptions=True)
-            # Close the Redis client once, on shutdown (not after construction).
+            # Close the Redis client once, on shutdown (not after construction)
             if redis_client is not None:
                 await redis_client.aclose()
 
